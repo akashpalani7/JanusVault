@@ -1,0 +1,87 @@
+# =========================
+# Flutter (app/)
+# =========================
+
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/.pub/
+app/.pub-cache/
+app/build/
+
+app/android/.gradle/
+app/android/local.properties
+app/android/captures/
+
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/App.framework
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/.last_build_id
+
+app/macos/Flutter/ephemeral/
+app/windows/flutter/ephemeral/
+app/linux/flutter/ephemeral/
+
+app/coverage/
+
+# =========================
+# Chrome Extension (extension/)
+# =========================
+
+extension/node_modules/
+extension/dist/
+extension/.vite/
+extension/*.tsbuildinfo
+extension/coverage/
+
+# =========================
+# IDE
+# =========================
+
+.vscode/
+.idea/
+*.iml
+
+# =========================
+# Logs
+# =========================
+
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# =========================
+# Environment
+# =========================
+
+.env
+.env.*
+
+# =========================
+# Flutter Secrets
+# =========================
+
+*.jks
+*.keystore
+key.properties
+
+# =========================
+# OS Files
+# =========================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Temporary
+# =========================
+
+.cache/
+.parcel-cache/
+.eslintcache
+tmp/
+temp/

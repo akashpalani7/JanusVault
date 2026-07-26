@@ -1,0 +1,67 @@
+name: peervault
+description: Offline-first decentralized password manager
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+# NOTE: this project deliberately has ZERO code generation (no build_runner,
+# no freezed, no json_serializable, no Isar). All models are plain
+# hand-written Dart classes and storage is a simple JSON-file-backed store
+# (see core/storage/vault_database.dart). This was a direct fix for
+# real-world dependency conflicts between isar_generator's pinned
+# `analyzer` version and freezed/json_serializable's — rather than chase
+# specific compatible version numbers (which drift over time and can't be
+# verified from this sandbox, since it has no pub.dev access), removing
+# codegen removes the entire conflict surface.
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management (plain Provider style — no riverpod_generator/
+  # riverpod_annotation, so no codegen dependency here either)
+  flutter_riverpod: ^2.5.1
+
+  # Secure key storage (Android Keystore / iOS Keychain backed)
+  flutter_secure_storage: ^9.2.2
+
+  # Cryptography (AES-GCM, Argon2id, HKDF, secure random)
+  cryptography: ^2.7.0
+
+  # Biometric / device auth
+  local_auth: ^2.3.0
+
+  # LAN discovery + sync (advertise AND discover mDNS/Bonjour services)
+  bonsoir: ^5.1.7
+  network_info_plus: ^5.0.3
+
+  # Connectivity awareness
+  connectivity_plus: ^6.0.3
+
+  # Device metadata (for trusted device identity)
+  device_info_plus: ^10.1.0
+
+  # Background sync scheduling
+  workmanager: ^0.9.0+3
+
+  # IDs
+  uuid: ^4.4.0
+
+  # File picking for backup/restore + on-disk storage location
+  file_picker: ^8.0.6
+  path_provider: ^2.1.3
+
+  # QR for device pairing
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^7.4.0
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

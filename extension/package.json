@@ -1,0 +1,15 @@
+{
+  "name": "peervault-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc && npm run copy-assets",
+    "copy-assets": "mkdir -p dist/popup dist/icons && cp src/popup/popup.html dist/popup/ && cp src/popup/popup.css dist/popup/ && cp public/manifest.json dist/ && cp public/icons/* dist/icons/",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "typescript": "^5.5.4"
+  }
+}

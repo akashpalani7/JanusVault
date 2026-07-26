@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PeerVault</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>PeerVault</h1>
+      <span id="status" class="status">checking…</span>
+    </header>
+
+    <main>
+      <section id="lockedView" class="hidden">
+        <p>Vault not paired with this browser yet.</p>
+        <p class="hint">Open PeerVault on your phone → Trusted devices → Pair new device, then paste the pairing code shown there (or use "Copy as text" if your phone shows that option instead of a QR you can scan here).</p>
+        <textarea id="pairingInput" rows="3" placeholder="peervault-pair:v2:..."></textarea>
+        <button id="pairButton">Pair this browser</button>
+        <p id="pairStatus" class="hint"></p>
+      </section>
+
+      <section id="phoneSection" class="hidden">
+        <h2>Phone connection</h2>
+        <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's LAN address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
+        <input id="hostInput" type="text" placeholder="192.168.x.x:51827" />
+        <button id="syncButton">Sync now</button>
+        <p id="syncStatus" class="hint"></p>
+      </section>
+
+      <section id="searchView" class="hidden">
+        <input id="searchInput" type="text" placeholder="Search saved passwords…" />
+        <ul id="resultsList"></ul>
+        <p id="emptyHint" class="hint hidden">No saved passwords yet — add one from the phone app, or submit a login form on any site to capture it here.</p>
+      </section>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
