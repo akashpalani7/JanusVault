@@ -1,4 +1,5 @@
 import { SyncMessage } from "./models.js";
+import { hmacSha256 } from "./crypto.js";
 
 export type PhoneAuthOutcome = "approved" | "denied" | "unreachable" | "timeout";
 
@@ -11,21 +12,33 @@ export type PhoneAuthOutcome = "approved" | "denied" | "unreachable" | "timeout"
  * phone's, over the LAN, every single time a password is revealed,
  * autofilled, or copied.
  *
+ * `syncAuthKey` is derived from the VEK (see crypto.ts's
+ * deriveSyncAuthKey) — the phone challenges every new connection with a
+ * nonce and won't process anything beyond that handshake until answered
+ * correctly, so a stranger on the same WiFi can't reach this endpoint at
+ * all, let alone trigger an approval prompt. We wait for the phone's
+ * unsolicited `deviceInfo` broadcast (sent only AFTER it accepts our
+ * handshake response) as proof we're clear to send the real request,
+ * rather than assuming any particular message ordering.
+ *
  * Requires the phone to have "Make this device visible for sync" turned
  * on (Sync screen) so it's listening at all. If it can't be reached
- * within `timeoutMs`, resolves "unreachable" rather than throwing, so
- * callers can fall back to the local quick-PIN gate instead of hanging.
+ * within `timeoutMs`, resolves "unreachable" — there is deliberately no
+ * fallback of any kind; the caller must treat that as a refusal.
  */
 export function requestPhoneApproval(
   host: string,
   port: number,
   actionLabel: string,
-  timeoutMs = 20000,
+  syncAuthKey: CryptoKey,
+  timeoutMs = 60000,
 ): Promise<PhoneAuthOutcome> {
   return new Promise((resolve) => {
     let settled = false;
+    let authRequestSent = false;
     const requestId = crypto.randomUUID();
     let socket: WebSocket;
+    let sentNonceBase64 = "";
 
     const finish = (outcome: PhoneAuthOutcome) => {
       if (settled) return;
@@ -49,26 +62,52 @@ export function requestPhoneApproval(
       return;
     }
 
-    socket.onopen = () => {
-      const message: SyncMessage = { type: "authRequest", payload: { requestId, actionLabel } };
-      socket.send(JSON.stringify(message));
-    };
-
-    socket.onmessage = (event) => {
+    socket.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data) as SyncMessage;
+
+        if (message.type === "hello") {
+          console.log(`Auth socket: Answering phone's hello challenge...`);
+          const nonce = message.payload.nonce as string;
+          const mac = await hmacSha256(syncAuthKey, nonce);
+          socket.send(JSON.stringify({ type: "helloResponse", payload: { mac } } satisfies SyncMessage));
+          return;
+        }
+
+        if (message.type === "helloResponse") {
+          // In auth-client, we don't strictly need to do anything with the response, 
+          // because the server's deviceInfo message is the true explicit proof of verification.
+          return;
+        }
+
+        if (message.type === "deviceInfo" && !authRequestSent) {
+          // The phone only ever sends this after successfully verifying
+          // our handshake response — safe to send the real request now.
+          authRequestSent = true;
+          socket.send(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel } } satisfies SyncMessage));
+          return;
+        }
+
         if (message.type === "authResponse" && message.payload.requestId === requestId) {
+          console.log(`Auth socket: Received response: ${message.payload.approved}`);
           finish(message.payload.approved ? "approved" : "denied");
         }
-        // Ignore anything else (e.g. an unsolicited deviceInfo broadcast
-        // the phone sends to every new connection) — we only care about
-        // the matching authResponse here.
       } catch {
         // Malformed frame — ignore rather than crash the popup.
       }
     };
 
-    socket.onerror = () => finish("unreachable");
+    socket.onopen = () => {
+      console.log(`Auth socket: Opened connection to ${host}:${port}. Sending hello challenge...`);
+      const nonce = crypto.getRandomValues(new Uint8Array(16));
+      sentNonceBase64 = btoa(String.fromCharCode(...nonce));
+      socket.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage));
+    };
+
+    socket.onerror = () => {
+      console.error(`Auth socket error: Could not connect to ${host}:${port}`);
+      finish("unreachable");
+    }
     socket.onclose = () => finish("unreachable");
   });
 }

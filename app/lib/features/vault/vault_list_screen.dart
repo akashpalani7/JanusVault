@@ -11,11 +11,48 @@ import '../settings/settings_screen.dart';
 import '../sync/sync_screen.dart';
 import 'entry_editor_screen.dart';
 
-class VaultListScreen extends ConsumerWidget {
+class VaultListScreen extends ConsumerStatefulWidget {
   const VaultListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<VaultListScreen> createState() => _VaultListScreenState();
+}
+
+class _VaultListScreenState extends ConsumerState<VaultListScreen> {
+  bool _autoSynced = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _startAutoSync();
+  }
+
+  Future<void> _startAutoSync() async {
+    if (_autoSynced) return;
+    _autoSynced = true;
+    final syncService = ref.read(lanSyncServiceProvider);
+    
+    // Automatically make device visible for sync
+    try {
+      await syncService.startAdvertisingAndServing(deviceDisplayName: 'PeerVault');
+    } catch (_) {}
+
+    // Auto-discover and sync with peers
+    try {
+      final peers = await syncService.discoverPeers();
+      for (final peer in peers) {
+        try {
+          await syncService.syncWithPeer(peer);
+          if (mounted) {
+            ref.invalidate(filteredEntriesProvider);
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final entriesAsync = ref.watch(filteredEntriesProvider);
 
     return Scaffold(

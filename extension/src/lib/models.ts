@@ -30,12 +30,22 @@ export interface RecordMeta {
   deleted: boolean;
 }
 
-export type SyncMsgType = "hello" | "deviceInfo" | "metadata" | "request" | "records" | "done" | "error" | "authRequest" | "authResponse";
+export type SyncMsgType = "hello" | "helloResponse" | "deviceInfo" | "metadata" | "request" | "records" | "done" | "error" | "authRequest" | "authResponse" | "pairingRequest" | "pairingChallenge" | "pairingSuccess";
 
-export interface SyncMessage {
-  type: SyncMsgType;
-  payload: Record<string, unknown>;
-}
+export type SyncMessage =
+  | { type: "hello"; payload: { nonce: string } }
+  | { type: "helloResponse"; payload: { mac: string } }
+  | { type: "deviceInfo"; payload: { devices: DeviceInfo[] } }
+  | { type: "metadata"; payload: { entries: RecordMeta[] } }
+  | { type: "request"; payload: { uuids: string[] } }
+  | { type: "records"; payload: { entries: EncryptedEntryRecord[] } }
+  | { type: "done"; payload: Record<string, never> }
+  | { type: "error"; payload: { message: string } }
+  | { type: "authRequest"; payload: { requestId: string; actionLabel: string } }
+  | { type: "authResponse"; payload: { requestId: string; approved: boolean } }
+  | { type: "pairingRequest"; payload: { deviceName: string; pubKey: string } }
+  | { type: "pairingChallenge"; payload: { pubKey: string } }
+  | { type: "pairingSuccess"; payload: { wrappedVek: string; device: DeviceInfo } };
 
 /** Mirrors DeviceInfo in sync_protocol.dart exactly — non-secret trusted
  * device metadata exchanged so the phone's "Trusted devices" list learns

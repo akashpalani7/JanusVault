@@ -139,6 +139,57 @@ button.secondary {
   padding-top: 12px;
 }
 
+nav#mainNav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+nav#mainNav .nav-btn {
+  flex: 1;
+  margin-top: 0;
+  background: #e0e0f0;
+  color: #1a1a2e;
+  font-size: 11px;
+  padding: 6px 4px;
+}
+
+nav#mainNav .nav-btn.active {
+  background: #4b4bff;
+  color: white;
+}
+
+ul#devicesList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+ul#devicesList li {
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+}
+
+ul#devicesList .device-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+ul#devicesList .device-meta {
+  font-size: 11px;
+  color: #666;
+}
+
+#importFileInput {
+  width: 100%;
+  margin: 8px 0;
+}
+
+input[type="range"] {
+  width: 100%;
+  margin: 6px 0;
+}
+
 #phoneSection {
   margin-top: 0;
   padding-top: 0;

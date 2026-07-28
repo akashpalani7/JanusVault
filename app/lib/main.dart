@@ -1,5 +1,20 @@
+import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+// IMPORTANT: this import has no direct use in this file — main() never
+// calls anything from it. It exists purely so the Dart compiler includes
+// autofill_entrypoint.dart (and its autofillMain() entry point) in the
+// compiled app at all. @pragma('vm:entry-point') only protects an
+// ALREADY-INCLUDED function from tree-shaking; it cannot pull in a file
+// that nothing imports in the first place. Without this line, native
+// Kotlin (AutofillBridge.kt) was calling a Dart entrypoint that simply
+// didn't exist in the built app — silently, with no error surfaced
+// anywhere, which is exactly why autofill and the background sync
+// listener both did nothing at all despite registering correctly with
+// Android.
+// ignore: unused_import
+import 'autofill_entrypoint.dart';
 
 import 'core/auth/biometric_auth.dart';
 import 'core/storage/vault_database.dart';
@@ -15,6 +30,7 @@ final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterCryptography.enable();
   await VaultDatabase.instance.load();
 
   // Wired up once, globally: any time the browser extension asks this
@@ -31,10 +47,15 @@ Future<void> main() async {
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Approve from your browser?'),
-        content: Text('Your PeerVault browser extension wants to $actionLabel. Approve on this phone?'),
+        content: Text(
+            'Your PeerVault browser extension wants to $actionLabel. Approve on this phone?'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Deny')),
-          FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Approve')),
+          TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Deny')),
+          FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Approve')),
         ],
       ),
     );
@@ -42,6 +63,51 @@ Future<void> main() async {
 
     final result = await BiometricAuthService.instance.authenticate(
       reason: 'Confirm it\'s you to let your browser extension $actionLabel',
+    );
+    return result.success;
+  };
+
+  LanSyncService.instance.onPairingRequested = (deviceName, pin) async {
+    final context = rootNavigatorKey.currentContext;
+    if (context == null) return false;
+
+    final wantsToApprove = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pairing Request'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+                'A new device ("$deviceName") wants to pair with this vault over Wi-Fi.'),
+            const SizedBox(height: 16),
+            const Text(
+                'Verify this PIN matches what is shown on the new device:',
+                textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            Text(pin,
+                style: const TextStyle(
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Deny')),
+          FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Matches! Approve')),
+        ],
+      ),
+    );
+
+    if (wantsToApprove != true) return false;
+
+    final result = await BiometricAuthService.instance.authenticate(
+      reason: 'Confirm it\'s you to approve pairing with $deviceName',
     );
     return result.success;
   };
@@ -57,8 +123,14 @@ class PeerVaultApp extends StatelessWidget {
     return MaterialApp(
       navigatorKey: rootNavigatorKey,
       title: 'PeerVault',
-      theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.light),
-      darkTheme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true, brightness: Brightness.dark),
+      theme: ThemeData(
+          colorSchemeSeed: Colors.indigo,
+          useMaterial3: true,
+          brightness: Brightness.light),
+      darkTheme: ThemeData(
+          colorSchemeSeed: Colors.indigo,
+          useMaterial3: true,
+          brightness: Brightness.dark),
       home: const _RootRouter(),
     );
   }

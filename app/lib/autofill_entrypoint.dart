@@ -1,20 +1,27 @@
-// Background entrypoint used ONLY by the native Android AutofillService
-// (see android/.../PeerVaultAutofillService.kt + AutofillBridge.kt).
+// Background entrypoint used by TWO native Android components:
+//   1. PeerVaultAutofillService.kt (autofill suggestions/save)
+//   2. PeerVaultSyncForegroundService.kt (the always-on "listen for LAN
+//      sync + phone-approval requests, even with the app fully closed"
+//      background service, toggled via the quick-settings tile or the
+//      Sync screen)
+// Both talk to native Kotlin over the SAME MethodChannel (see
+// AutofillBridge.kt) and reuse the same VaultSession / VaultRepository /
+// CryptoEngine / LanSyncService as the main app — there is only ONE
+// implementation of vault logic in this whole project; native code never
+// touches encryption directly, it only calls into this Dart layer.
 //
 // Android keeps a small, separate FlutterEngine alive specifically to run
-// this entrypoint so autofill can work even when the main app UI isn't
-// open. It talks to native Kotlin over a MethodChannel and reuses the same
-// VaultSession / VaultRepository / CryptoEngine as the main app — there is
-// only ONE implementation of vault logic in this whole project; native
-// code never touches encryption directly, it only calls into this Dart
-// layer, which is the entire point of keeping "everything in the Flutter
-// app" rather than duplicating vault logic in Kotlin.
+// this entrypoint so both features work even when the main app UI isn't
+// open.
 
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
 import 'core/storage/vault_database.dart';
+import 'core/sync/lan_sync_service.dart';
 import 'core/vault/vault_repository.dart';
 import 'core/vault/vault_session.dart';
 
@@ -22,6 +29,7 @@ const MethodChannel _channel = MethodChannel('com.peervault.app/autofill');
 
 @pragma('vm:entry-point')
 void autofillMain() {
+  WidgetsFlutterBinding.ensureInitialized();
   _channel.setMethodCallHandler(_handleCall);
   _initializeThenSignalReady();
 }
@@ -48,6 +56,12 @@ Future<dynamic> _handleCall(MethodCall call) async {
       return VaultSession.instance.isUnlocked;
     case 'saveCapturedCredential':
       return _saveCapturedCredential(call.arguments as Map<dynamic, dynamic>);
+    case 'startSyncListening':
+      return _startSyncListening(call.arguments as Map<dynamic, dynamic>);
+    case 'stopSyncListening':
+      return _stopSyncListening();
+    case 'resolveApproval':
+      return _resolveApproval(call.arguments as Map<dynamic, dynamic>);
     default:
       throw MissingPluginException('No handler for ${call.method}');
   }
@@ -80,7 +94,7 @@ Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
   return jsonEncode({
     'locked': false,
     'entries': matches
-        .map((e) => {
+        .map((e) => <String, dynamic>{
               'uuid': e.uuid,
               'websiteName': e.websiteName,
               'username': e.username,
@@ -122,4 +136,60 @@ Future<bool> _saveCapturedCredential(Map<dynamic, dynamic> args) async {
     password: password,
   );
   return true;
+}
+
+/// Resolved (approved/denied) from PeerVaultRemoteApprovalActivity.kt once
+/// the user responds to the "Approve access from your browser?" notification
+/// this isolate posted via `showApprovalNotification`. Null while nothing
+/// is pending.
+Completer<bool>? _pendingApprovalCompleter;
+
+/// Starts the LAN sync server so this device can respond to sync +
+/// phone-approval requests with the app fully closed — called from
+/// PeerVaultSyncForegroundService.kt, which is what keeps this isolate
+/// alive in the background (a plain background isolate with no foreground
+/// service would get killed by Android fairly quickly).
+///
+/// Auto-unlocks silently: reading this device's local wrapping key from
+/// FlutterSecureStorage does NOT require biometric confirmation (see
+/// SecureKeyStore's doc comment) — only the per-request approval below
+/// does. Without this silent unlock, the always-on listener could accept
+/// connections but could never actually answer the VEK-derived handshake,
+/// making it useless.
+Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
+  final displayName = args['displayName'] as String? ?? 'This device';
+
+  if (!VaultSession.instance.isUnlocked) {
+    final settings = VaultDatabase.instance.settings;
+    if (settings != null) {
+      try {
+        await VaultSession.instance.unlock(selfDeviceId: settings.selfDeviceId);
+      } catch (_) {
+        return; // can't unlock (e.g. not yet set up on this device) — nothing to listen with
+      }
+    }
+  }
+
+  // This headless isolate has no Activity, so it can't show a Material
+  // dialog the way main.dart's foreground handler does. Instead: post a
+  // native notification and wait for PeerVaultRemoteApprovalActivity.kt
+  // (launched from that notification, which DOES have an Activity, so it
+  // CAN run BiometricPrompt) to call back via `resolveApproval`.
+  LanSyncService.instance.onAuthPromptRequested = (actionLabel) async {
+    _pendingApprovalCompleter = Completer<bool>();
+    await _channel.invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
+    return _pendingApprovalCompleter!.future.timeout(const Duration(seconds: 55), onTimeout: () => false);
+  };
+
+  await LanSyncService.instance.startAdvertisingAndServing(deviceDisplayName: displayName);
+}
+
+Future<void> _stopSyncListening() async {
+  await LanSyncService.instance.stopAdvertisingAndServing();
+}
+
+Future<void> _resolveApproval(Map<dynamic, dynamic> args) async {
+  final approved = args['approved'] as bool? ?? false;
+  _pendingApprovalCompleter?.complete(approved);
+  _pendingApprovalCompleter = null;
 }

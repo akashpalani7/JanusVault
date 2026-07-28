@@ -2,6 +2,7 @@ package com.example.peervault.app
 
 import android.app.assist.AssistStructure
 import android.content.Intent
+import com.example.peervault.MainActivity
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
@@ -65,6 +66,18 @@ class PeerVaultAutofillService : AutofillService() {
                     for (i in 0 until entries.length()) {
                         val entry = entries.getJSONObject(i)
                         responseBuilder.addDataset(buildDataset(fields, entry.getString("websiteName"), entry.getString("username"), entry.getString("password")))
+                    }
+                    if (entries.length() == 0) {
+                        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+                            setTextViewText(android.R.id.text1, "No passwords found for $query")
+                        }
+                        val allIds = listOfNotNull(fields.usernameId, fields.passwordId).toTypedArray()
+                        val mainIntent = Intent(applicationContext, MainActivity::class.java)
+                        val pendingIntent = android.app.PendingIntent.getActivity(
+                            applicationContext, 1002, mainIntent,
+                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        )
+                        responseBuilder.setAuthentication(allIds, pendingIntent.intentSender, presentation)
                     }
                 } else {
                     // Locked: single "Unlock PeerVault" suggestion. Tapping it

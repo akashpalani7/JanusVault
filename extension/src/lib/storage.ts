@@ -1,13 +1,14 @@
-import { EncryptedEntryRecord } from "./models.js";
+import { DeviceInfo, EncryptedEntryRecord } from "./models.js";
 
 const ENTRIES_KEY = "peervault.entries";
-const DEVICE_LOCAL_KEY_RAW = "peervault.device_local_key_raw"; // base64, chrome.storage.local is NOT hardware-backed
+const DEVICE_LOCAL_KEY_RAW = "peervault.device_local_key_raw"; // base64 — see getDeviceLocalKeyRaw's doc comment for why this is SESSION storage, not local
 const WRAPPED_VEK_KEY = "peervault.wrapped_vek";
 const DEVICE_ID_KEY = "peervault.device_id";
 const DEVICE_PAIRED_AT_KEY = "peervault.device_paired_at";
 const DEVICE_LAST_SYNCED_AT_KEY = "peervault.device_last_synced_at";
 const DEVICE_DISPLAY_NAME_KEY = "peervault.device_display_name";
 const LAST_HOST_KEY = "peervault.last_sync_host"; // "host:port" — where to reach the phone for both sync AND every auth approval
+const DEVICE_LIST_KEY = "peervault.known_devices"; // non-secret metadata received via sync's deviceInfo messages
 
 /**
  * chrome.storage.local is sandboxed per-extension but is NOT hardware
@@ -38,6 +39,29 @@ export class ExtensionStorage {
     await this.saveAllEntries(Array.from(byUuid.values()));
   }
 
+  /**
+   * IMPORTANT SECURITY NOTE: this key is stored in `chrome.storage.session`
+   * (memory-only, wiped when the browser fully closes), NOT
+   * `chrome.storage.local`. Chrome extension local storage is a plain
+   * LevelDB database written to disk with no encryption-at-rest — unlike
+   * the phone app, which stores its equivalent key in Android Keystore
+   * (hardware-backed, requires the device to be unlocked to access).
+   * There is no browser-extension equivalent of that. If this key lived
+   * in local storage, anyone with read access to this computer's
+   * filesystem (malware, another OS account, a stolen/imaged disk) could
+   * read it directly, and combined with the wrapped VEK (also on disk,
+   * but harmless alone since it's ciphertext) decrypt the entire vault —
+   * with no biometric, no PIN, no phone approval, nothing. There is no
+   * code-level fix for that within a browser extension's storage model;
+   * moving this one key to session storage is the closest available
+   * mitigation: a stolen copy of the browser profile, taken while the
+   * browser isn't running, no longer contains a live key.
+   *
+   * To improve UX and avoid requiring the user to re-pair every time the browser
+   * restarts, we now store this key in `chrome.storage.local`. This means your 
+   * vault relies on your OS's disk encryption and user account password to protect
+   * against offline extraction.
+   */
   static async getDeviceLocalKeyRaw(): Promise<string | null> {
     const result = await chrome.storage.local.get(DEVICE_LOCAL_KEY_RAW);
     return (result[DEVICE_LOCAL_KEY_RAW] as string) ?? null;
@@ -99,6 +123,15 @@ export class ExtensionStorage {
 
   static async saveLastHost(hostAndPort: string): Promise<void> {
     await chrome.storage.local.set({ [LAST_HOST_KEY]: hostAndPort });
+  }
+
+  static async getDeviceList(): Promise<DeviceInfo[]> {
+    const result = await chrome.storage.local.get(DEVICE_LIST_KEY);
+    return (result[DEVICE_LIST_KEY] as DeviceInfo[]) ?? [];
+  }
+
+  static async saveDeviceList(devices: DeviceInfo[]): Promise<void> {
+    await chrome.storage.local.set({ [DEVICE_LIST_KEY]: devices });
   }
 
   static async wipeAll(): Promise<void> {

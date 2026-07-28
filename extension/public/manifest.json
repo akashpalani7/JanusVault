@@ -28,7 +28,7 @@
       "all_frames": true
     }
   ],
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "alarms", "tabs", "clipboardWrite"],
   "host_permissions": [
     "http://*/*",
     "https://*/*"

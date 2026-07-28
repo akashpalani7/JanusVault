@@ -5,4 +5,17 @@
   launched from Settings > Autofill service > PeerVault > Settings.
 -->
 <autofill-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="com.example.peervault.MainActivity" />
+    android:settingsActivity="com.example.peervault.MainActivity">
+    
+    <compatibility-package android:name="com.android.chrome" android:maxLongVersionCode="10000000000">
+        <url-bar resourceId="com.android.chrome:id/url_bar" />
+    </compatibility-package>
+    
+    <compatibility-package android:name="org.mozilla.firefox" android:maxLongVersionCode="10000000000">
+        <url-bar resourceId="org.mozilla.firefox:id/mozac_browser_toolbar_url_view" />
+    </compatibility-package>
+    
+    <compatibility-package android:name="com.brave.browser" android:maxLongVersionCode="10000000000">
+        <url-bar resourceId="com.brave.browser:id/url_bar" />
+    </compatibility-package>
+</autofill-service>

@@ -1,16 +1,61 @@
 import {
   decryptString,
   deriveKeyFromPairingCode,
+  deriveSyncAuthKey,
   decodePairingCode,
   encryptString,
   parsePairingPackage,
+  buildPairingPackage,
   unwrapVek,
   wrapVek,
+  deriveEcdhWrappingKey,
 } from "../lib/crypto.js";
 import { EncryptedEntryRecord } from "../lib/models.js";
 import { ExtensionStorage } from "../lib/storage.js";
-import { recomputeHash } from "../lib/sync-client.js";
+import { recomputeHash, syncWithPhone } from "../lib/sync-client.js";
 import { requestPhoneApproval } from "../lib/auth-client.js";
+
+/**
+ * A form submit almost always triggers navigation before the user can
+ * react to an on-page banner — the banner (and the whole page it's
+ * attached to) gets torn down mid-flight. So the content script doesn't
+ * render anything at submit time; it just tells us what was submitted,
+ * and we relay a "show the banner" instruction to whatever page ends up
+ * loaded in that tab next (or, if nothing navigates — an SPA form — a
+ * short fallback timer shows it on the same page instead). Either way,
+ * the confirmation UI reliably survives long enough to be clickable.
+ */
+const pendingSaves = new Map<number, { domain: string; username: string; password: string }>();
+
+function schedulePendingSaveDelivery(tabId: number) {
+  // Fires almost immediately for an SPA (no real navigation happens, so
+  // the content script is still alive) and gets pre-empted by the
+  // onUpdated listener below for a real cross-page navigation, which is
+  // usually a bit slower than this timer — either path ends with exactly
+  // one delivery attempt, via deliverPendingSave's own cleanup.
+  setTimeout(() => deliverPendingSave(tabId), 600);
+  // Safety net in case neither the timer nor onUpdated ever manages to
+  // reach a live content script (page kept navigating, etc.).
+  setTimeout(() => pendingSaves.delete(tabId), 120000);
+}
+
+async function deliverPendingSave(tabId: number) {
+  const pending = pendingSaves.get(tabId);
+  if (!pending) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "SHOW_SAVE_BANNER", ...pending });
+    // Held dynamically in pendingSaves block until the user manually triggers 'SAVE_RESOLVED' via clicking interaction. 
+  } catch {
+    // No content script alive there yet (page still loading) — onUpdated
+    // below will retry once it finishes loading.
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "complete" && pendingSaves.has(tabId)) {
+    deliverPendingSave(tabId);
+  }
+});
 
 /**
  * SECURITY MODEL: there is deliberately no local PIN, password, or any
@@ -71,12 +116,13 @@ type ApprovalOutcome = "approved" | "denied" | "unreachable" | "timeout" | "no_p
  * "remember for this session" — a fresh request to the phone every time,
  * because that's what was explicitly asked for.
  */
-async function requireApprovalOrDeny(actionLabel: string): Promise<ApprovalOutcome> {
+async function requireApprovalOrDeny(actionLabel: string, vek: CryptoKey): Promise<ApprovalOutcome> {
   const lastHost = await ExtensionStorage.getLastHost();
   if (!lastHost) return "no_phone_configured";
   const [host, portStr] = lastHost.split(":");
   const port = Number(portStr) || 51827;
-  return requestPhoneApproval(host, port, actionLabel);
+  const syncAuthKey = await deriveSyncAuthKey(vek);
+  return requestPhoneApproval(host, port, actionLabel, syncAuthKey);
 }
 
 /** Metadata only — used for both the popup's browsable list and the
@@ -135,7 +181,7 @@ async function revealPassword(uuid: string) {
   const vek = await getVek();
   if (!vek) return { ok: false, outcome: "locked" as const };
 
-  const outcome = await requireApprovalOrDeny("reveal a saved password");
+  const outcome = await requireApprovalOrDeny("reveal a saved password", vek);
   if (outcome !== "approved") return { ok: false, outcome };
 
   const record = (await ExtensionStorage.getAllEntries()).find((e) => e.uuid === uuid);
@@ -151,7 +197,7 @@ async function autofillIntoTab(uuid: string, tabId?: number) {
   const vek = await getVek();
   if (!vek) return { filled: false, reason: "locked" };
 
-  const outcome = await requireApprovalOrDeny("autofill a saved password into this page");
+  const outcome = await requireApprovalOrDeny("autofill a saved password into this page", vek);
   if (outcome !== "approved") return { filled: false, reason: outcome };
 
   const record = (await ExtensionStorage.getAllEntries()).find((e) => e.uuid === uuid);
@@ -173,10 +219,14 @@ async function autofillIntoTab(uuid: string, tabId?: number) {
       password: decrypted.password,
     });
     return { filled: Boolean(response?.filled), reason: response?.filled ? undefined : "no_form_on_page" };
-  } catch {
-    // No content script listening on this tab (e.g. a chrome:// page, or
-    // the tab was loaded before the extension itself was installed).
-    return { filled: false, reason: "no_content_script" };
+  } catch (err) {
+    // If we reach here, it either means no content script is loaded 
+    // OR no frame actually found the form and replied to us (so the port closed).
+    const message = (err as Error).message;
+    if (message.includes("Receiving end does not exist") || message.includes("Could not establish connection")) {
+      return { filled: false, reason: "no_content_script" };
+    }
+    return { filled: false, reason: "no_form_on_page" };
   }
 }
 
@@ -210,8 +260,71 @@ async function captureCredential(domain: string, username: string, password: str
   const record: EncryptedEntryRecord = { ...partial, hash };
 
   await ExtensionStorage.upsertEntries([record]);
+  attemptBackgroundSync(); // push the new entry immediately rather than waiting for the next manual/periodic sync
   return { saved: true };
 }
+
+/** Updates a previously saved credential, preserving its UUID and creation timestamp. */
+async function updateCredential(uuid: string, domain: string, username: string, password: string) {
+  const vek = await getVek();
+  if (!vek) return { saved: false, reason: "locked" };
+
+  const all = await ExtensionStorage.getAllEntries();
+  const existing = all.find((e) => e.uuid === uuid);
+  if (!existing) return { saved: false, reason: "not_found" };
+
+  const now = new Date().toISOString();
+  const encryptedWebsiteName = await encryptString(domain, vek);
+  const encryptedWebsiteUrl = await encryptString(domain, vek);
+  const encryptedUsername = await encryptString(username, vek);
+  const encryptedPassword = await encryptString(password, vek);
+
+  const partial = {
+    uuid,
+    encryptedWebsiteName,
+    encryptedWebsiteUrl,
+    encryptedUsername,
+    encryptedPassword,
+    createdAt: existing.createdAt,
+    lastUpdated: now,
+    deleted: false,
+  };
+  const hash = await recomputeHash(partial);
+  const record: EncryptedEntryRecord = { ...partial, hash };
+
+  await ExtensionStorage.upsertEntries([record]);
+  attemptBackgroundSync();
+  return { saved: true };
+}
+
+/**
+ * Best-effort, silent sync attempt — used for the "should just happen"
+ * triggers: browser startup, a periodic alarm (approximates "whenever
+ * both devices are on the same network" without real presence detection,
+ * which a browser extension has no way to do), and right after saving a
+ * new credential. Never surfaces an error to the user; the manual "Sync
+ * now" button in the popup remains the way to see what happened.
+ */
+async function attemptBackgroundSync(): Promise<void> {
+  const vek = await getVek();
+  const lastHost = await ExtensionStorage.getLastHost();
+  if (!vek || !lastHost) return;
+  const [host, portStr] = lastHost.split(":");
+  const port = Number(portStr) || 51827;
+  try {
+    await syncWithPhone(host, port, vek);
+  } catch {
+    // Silent — phone likely just isn't reachable right now (off network,
+    // app closed, "visible for sync" off). The alarm will try again.
+  }
+}
+
+chrome.runtime.onStartup.addListener(() => attemptBackgroundSync());
+chrome.runtime.onInstalled.addListener(() => attemptBackgroundSync());
+chrome.alarms.create("peervault-periodic-sync", { periodInMinutes: 5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "peervault-periodic-sync") attemptBackgroundSync();
+});
 
 /**
  * Completes pairing entirely offline, using nothing but the string scanned
@@ -219,7 +332,7 @@ async function captureCredential(domain: string, username: string, password: str
  * mirroring DeviceManager.completeNewDevicePairing on the Dart side
  * exactly (same salt/info in deriveKeyFromPairingCode, same wire format).
  */
-async function completePairing(rawPairingPackage: string) {
+async function completePairing(rawPairingPackage: string, deviceName?: string) {
   const { pairingCodePrintable, wrappedVekForTransitBase64 } = parsePairingPackage(rawPairingPackage);
   const codeBytes = decodePairingCode(pairingCodePrintable);
   const pairingKey = await deriveKeyFromPairingCode(codeBytes);
@@ -242,7 +355,30 @@ async function completePairing(rawPairingPackage: string) {
   await ExtensionStorage.saveDeviceId(`ext_${Date.now()}`);
   await ExtensionStorage.savePairedAt(now);
   await ExtensionStorage.saveLastSyncedAt(now);
+  if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
   cachedVek = vek; // available immediately, no need to wait for a worker restart
+
+  return { paired: true };
+}
+
+async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: number[], deviceName?: string) {
+  const sharedSecret = new Uint8Array(sharedSecretArray);
+  const wrappingKey = await deriveEcdhWrappingKey(sharedSecret);
+  const vek = await unwrapVek(wrappedVekBase64, wrappingKey);
+
+  const deviceLocalKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+  const rawLocalKeyBytes = new Uint8Array(await crypto.subtle.exportKey("raw", deviceLocalKey));
+  const rawLocalKeyBase64 = btoa(String.fromCharCode(...rawLocalKeyBytes));
+  const wrappedForStorage = await wrapVek(vek, deviceLocalKey);
+
+  const now = new Date().toISOString();
+  await ExtensionStorage.saveDeviceLocalKeyRaw(rawLocalKeyBase64);
+  await ExtensionStorage.saveWrappedVek(wrappedForStorage);
+  await ExtensionStorage.saveDeviceId(`ext_${Date.now()}`);
+  await ExtensionStorage.savePairedAt(now);
+  await ExtensionStorage.saveLastSyncedAt(now);
+  if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
+  cachedVek = vek;
 
   return { paired: true };
 }
@@ -265,15 +401,68 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // fall back to whichever tab is active.
         sendResponse(await autofillIntoTab(message.uuid as string, sender.tab?.id));
         break;
+      case "PENDING_SAVE": {
+        const tabId = sender.tab?.id;
+        if (tabId != null) {
+          pendingSaves.set(tabId, { domain: message.domain, username: message.username, password: message.password });
+          schedulePendingSaveDelivery(tabId);
+        }
+        sendResponse({ ok: tabId != null });
+        break;
+      }
+      case "SAVE_RESOLVED": {
+        if (sender.tab?.id != null) {
+          pendingSaves.delete(sender.tab.id);
+        }
+        sendResponse({ ok: true });
+        break;
+      }
       case "CAPTURE_CREDENTIAL":
         sendResponse(await captureCredential(message.domain, message.username, message.password));
+        break;
+      case "UPDATE_CREDENTIAL":
+        sendResponse(await updateCredential(message.uuid, message.domain, message.username, message.password));
         break;
       case "IS_UNLOCKED":
         sendResponse({ unlocked: (await getVek()) !== null });
         break;
+      case "SYNC_WITH_PHONE": {
+        const vek = await getVek();
+        if (!vek) {
+          sendResponse({ ok: false, error: "Not paired" });
+          break;
+        }
+        const host = message.host as string;
+        const port = (message.port as number) || 51827;
+        await ExtensionStorage.saveLastHost(`${host}:${port}`);
+        try {
+          const result = await syncWithPhone(host, port, vek);
+          sendResponse({ ok: true, ...result });
+        } catch (e) {
+          sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      }
+      case "CREATE_PAIRING_PACKAGE": {
+        const vek = await getVek();
+        if (!vek) {
+          sendResponse({ ok: false, error: "This browser isn't paired with a vault yet" });
+          break;
+        }
+        const { printableCode, encoded } = await buildPairingPackage(vek);
+        sendResponse({ ok: true, printableCode, encoded });
+        break;
+      }
       case "COMPLETE_PAIRING":
         try {
-          sendResponse(await completePairing(message.payload as string));
+          sendResponse(await completePairing(message.payload as string, message.deviceName as string | undefined));
+        } catch (e) {
+          sendResponse({ paired: false, error: (e as Error).message });
+        }
+        break;
+      case "COMPLETE_LAN_PAIRING":
+        try {
+          sendResponse(await completeLanPairing(message.wrappedVek as string, message.sharedSecretArray as number[], message.deviceName as string | undefined));
         } catch (e) {
           sendResponse({ paired: false, error: (e as Error).message });
         }

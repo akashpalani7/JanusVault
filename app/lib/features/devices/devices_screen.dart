@@ -106,6 +106,8 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
   String? _qrPayload;
   bool _scanMode = false;
   String? _error;
+  final _nameController = TextEditingController();
+  final _pasteController = TextEditingController();
 
   Future<void> _generatePackage() async {
     final package = await ref.read(deviceManagerProvider).createPairingPackage();
@@ -115,9 +117,10 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
   Future<void> _handleScannedCode(String raw) async {
     try {
       final package = PairingPackage.decode(raw);
+      final name = _nameController.text.trim();
       await ref.read(deviceManagerProvider).completeNewDevicePairing(
             package: package,
-            displayName: 'Paired device',
+            displayName: name.isEmpty ? 'Paired device' : name,
             platform: DevicePlatform.androidApp,
           );
       if (mounted) Navigator.of(context).pop();
@@ -130,6 +133,13 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
   void initState() {
     super.initState();
     _generatePackage();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _pasteController.dispose();
+    super.dispose();
   }
 
   @override
@@ -148,11 +158,56 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
         ],
       ),
       body: _scanMode
-          ? MobileScanner(
-              onDetect: (capture) {
-                final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
-                if (code != null) _handleScannedCode(code);
-              },
+          ? Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Name this device',
+                      hintText: 'e.g. "Rahul\'s laptop"',
+                      border: OutlineInputBorder(),
+                    ),
+                    textCapitalization: TextCapitalization.words,
+                  ),
+                ),
+                Expanded(
+                  child: MobileScanner(
+                    onDetect: (capture) {
+                      final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
+                      if (code != null) _handleScannedCode(code);
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      const Text('Pairing from a browser? Paste the code it showed you instead:'),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _pasteController,
+                        maxLines: 2,
+                        decoration: const InputDecoration(hintText: 'peervault-pair:v2:...', border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton(
+                        onPressed: () {
+                          final raw = _pasteController.text.trim();
+                          if (raw.isNotEmpty) _handleScannedCode(raw);
+                        },
+                        child: const Text('Use pasted code'),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                  ),
+              ],
             )
           : Center(
               child: _qrPayload == null

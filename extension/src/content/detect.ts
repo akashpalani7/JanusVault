@@ -13,17 +13,47 @@ interface MatchEntry {
   username: string;
 }
 
+function queryAllInputs(root: Document | ShadowRoot | Element = document): HTMLInputElement[] {
+  const inputs: HTMLInputElement[] = [];
+  
+  if (root.querySelectorAll) {
+    inputs.push(...Array.from(root.querySelectorAll("input")));
+  }
+  
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node instanceof HTMLElement && node.shadowRoot) {
+      inputs.push(...queryAllInputs(node.shadowRoot));
+    }
+  }
+  
+  return inputs;
+}
+
 function findCandidateFields(root: ParentNode = document): FoundField[] {
   const found: FoundField[] = [];
-  const inputs = root.querySelectorAll("input");
-  inputs.forEach((input) => {
-    if (input.type === "password") {
+  const inputs = queryAllInputs(root as Element);
+  
+  let firstPasswordIndex = -1;
+  inputs.forEach((input, index) => {
+    if (input.type === "password" && !input.hidden && input.style.display !== 'none') {
       found.push({ input, kind: "password" });
+      if (firstPasswordIndex === -1) firstPasswordIndex = index;
+    }
+  });
+
+  inputs.forEach((input, index) => {
+    if (input.type === "password" || input.hidden || input.style.display === 'none') {
       return;
     }
-    if (input.type === "email" || input.type === "text") {
-      const hints = `${input.autocomplete} ${input.name} ${input.id} ${input.placeholder}`.toLowerCase();
-      if (hints.includes("user") || hints.includes("email") || hints.includes("login")) {
+    
+    if (input.type === "email" || input.type === "text" || input.type === "tel" || !input.hasAttribute("type")) {
+      const hints = `${input.autocomplete} ${input.name} ${input.id} ${input.placeholder} ${input.type}`.toLowerCase();
+      if (hints.includes("user") || hints.includes("email") || hints.includes("login") || hints.includes("id") || hints.includes("account") || hints.includes("phone")) {
+        found.push({ input, kind: "username" });
+      } else if (firstPasswordIndex !== -1 && index === firstPasswordIndex - 1) {
+        // Fallback: If it's the text input immediately preceding the first password input, it's likely the username.
         found.push({ input, kind: "username" });
       }
     }
@@ -35,7 +65,7 @@ function getDomain(): string {
   return window.location.hostname;
 }
 
-function makeFloatingEl(anchorInput: HTMLInputElement, offsetTop = -32): HTMLDivElement {
+function makeFloatingEl(anchorInput: HTMLInputElement | null, offsetTop = -32): HTMLDivElement {
   const el = document.createElement("div");
   Object.assign(el.style, {
     position: "absolute",
@@ -48,11 +78,23 @@ function makeFloatingEl(anchorInput: HTMLInputElement, offsetTop = -32): HTMLDiv
     fontFamily: "system-ui, sans-serif",
     boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
   });
-  const rect = anchorInput.getBoundingClientRect();
-  el.style.top = `${window.scrollY + rect.top + offsetTop}px`;
-  el.style.left = `${window.scrollX + rect.left}px`;
+  if (anchorInput) {
+    const rect = anchorInput.getBoundingClientRect();
+    el.style.top = `${window.scrollY + rect.top + offsetTop}px`;
+    el.style.left = `${window.scrollX + rect.left}px`;
+  } else {
+    // No anchor available (e.g. showing a save banner on a page that
+    // navigated away from the form that triggered it) — pin to a corner
+    // instead of guessing at a position.
+    el.style.top = "16px";
+    el.style.right = "16px";
+  }
   return el;
 }
+
+// ---------------------------------------------------------------------
+// Existing-credential autofill chip
+// ---------------------------------------------------------------------
 
 /**
  * Shows the "Fill from PeerVault" chip. Only carries non-secret metadata
@@ -65,64 +107,268 @@ function makeFloatingEl(anchorInput: HTMLInputElement, offsetTop = -32): HTMLDiv
 async function offerAutofill() {
   const fields = findCandidateFields();
   const passwordField = fields.find((f) => f.kind === "password");
-  if (!passwordField) return;
+  if (!passwordField || document.getElementById("peervault-autofill-chip")) return;
 
   const response = await chrome.runtime.sendMessage({ type: "FIND_MATCHES", domain: getDomain() });
   const entries = (response?.entries ?? []) as MatchEntry[];
   if (response?.locked || !entries.length) return;
 
   const chip = makeFloatingEl(passwordField.input);
+  chip.id = "peervault-autofill-chip";
   chip.style.cursor = "pointer";
   chip.textContent = `Fill from PeerVault (${entries.length})`;
 
-  chip.addEventListener("click", async () => {
-    chip.textContent = "Waiting for approval on your phone…";
-    chip.style.cursor = "default";
-    const result = await chrome.runtime.sendMessage({ type: "AUTOFILL_TAB", uuid: entries[0].uuid });
-    if (result?.filled) {
-      chip.remove();
+  chip.addEventListener("click", () => {
+    const existing = document.getElementById("peervault-autofill-dropdown");
+    if (existing) {
+      existing.remove();
       return;
     }
-    const messages: Record<string, string> = {
-      denied: "Denied on phone.",
-      no_phone_configured: "Open the PeerVault popup and set your phone's address first.",
-      unreachable: "Couldn't reach your phone — is PeerVault open and sync visible?",
-      timeout: "Timed out waiting for your phone.",
-      no_form_on_page: "Couldn't find a form to fill.",
+
+    const dropdown = document.createElement("div");
+    dropdown.id = "peervault-autofill-dropdown";
+    dropdown.style.position = "absolute";
+    const rect = chip.getBoundingClientRect();
+    dropdown.style.top = `${window.scrollY + rect.bottom + 2}px`;
+    dropdown.style.left = `${window.scrollX + rect.left}px`;
+    dropdown.style.backgroundColor = "#242424";
+    dropdown.style.border = "1px solid #4a4a4a";
+    dropdown.style.borderRadius = "6px";
+    dropdown.style.boxShadow = "0 8px 16px rgba(0,0,0,0.5)";
+    dropdown.style.zIndex = "2147483647";
+    dropdown.style.display = "flex";
+    dropdown.style.flexDirection = "column";
+    dropdown.style.padding = "4px 0";
+    dropdown.style.minWidth = "150px";
+
+    for (const entry of entries) {
+      const item = document.createElement("div");
+      item.style.padding = "8px 16px";
+      item.style.cursor = "pointer";
+      item.style.color = "#ffffff";
+      item.style.fontFamily = "system-ui, sans-serif";
+      item.style.fontSize = "14px";
+      item.textContent = entry.username || entry.websiteName || "(Unknown account)";
+      
+      item.addEventListener("mouseover", () => { item.style.backgroundColor = "#3d3d3d"; });
+      item.addEventListener("mouseout", () => { item.style.backgroundColor = "transparent"; });
+      
+      item.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        dropdown.remove();
+        chip.textContent = "Approving…";
+        const result = await chrome.runtime.sendMessage({ type: "AUTOFILL_TAB", uuid: entry.uuid });
+        if (result?.filled) {
+          chip.remove();
+        } else {
+          chip.textContent = "Failed. Locked?";
+          setTimeout(() => chip.remove(), 2000);
+        }
+      });
+      dropdown.appendChild(item);
+    }
+
+    const outsideListener = (ev: MouseEvent) => {
+      if (!dropdown.contains(ev.target as Node) && ev.target !== chip) {
+        dropdown.remove();
+        document.removeEventListener("click", outsideListener);
+      }
     };
-    chip.textContent = messages[result?.reason as string] ?? "Autofill failed.";
-    setTimeout(() => chip.remove(), 4000);
+    setTimeout(() => document.addEventListener("click", outsideListener), 0);
+    
+    document.body.appendChild(dropdown);
   });
 
   document.body.appendChild(chip);
   setTimeout(() => chip.remove(), 15000);
 }
 
-/**
- * Shows a Save/Not now banner after a login form is submitted with a
- * password in it — nothing is EVER saved silently. This is the actual
- * "ask before saving" behavior: previously this fired straight into
- * storage with no confirmation UI of any kind.
- */
+// ---------------------------------------------------------------------
+// New-password suggestion (signup / change-password forms)
+// ---------------------------------------------------------------------
+
+function isLikelyNewPasswordContext(passwordFields: FoundField[], root: ParentNode): boolean {
+  if (passwordFields.length >= 2) return true; // password + confirm
+  const field = passwordFields[0]?.input;
+  if (!field) return false;
+  if (field.autocomplete === "new-password") return true;
+  const hints = `${field.name} ${field.id} ${field.placeholder}`.toLowerCase();
+  if (hints.includes("new") || hints.includes("confirm") || hints.includes("repeat") || hints.includes("create")) return true;
+  const rootText = root instanceof HTMLFormElement ? root.textContent?.toLowerCase() ?? "" : "";
+  return rootText.includes("sign up") || rootText.includes("create account") || rootText.includes("register");
+}
+
+/** Rejection-sampled so every character in the set is equally likely —
+ * plain `randomByte % charset.length` would bias toward earlier
+ * characters whenever charset.length doesn't evenly divide 256. */
+function generateStrongPassword(length: number): string {
+  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+";
+  const cutoff = 256 - (256 % charset.length);
+  const buf = new Uint8Array(1);
+  let result = "";
+  while (result.length < length) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < cutoff) result += charset[buf[0] % charset.length];
+  }
+  return result;
+}
+
+function offerNewPasswordSuggestion() {
+  const fields = findCandidateFields();
+  const passwordFields = fields.filter((f) => f.kind === "password");
+  if (!passwordFields.length) return;
+  if (!isLikelyNewPasswordContext(passwordFields, passwordFields[0].input.form ?? document)) return;
+  if (document.getElementById("peervault-suggest-chip")) return;
+
+  const chip = makeFloatingEl(passwordFields[0].input);
+  chip.id = "peervault-suggest-chip";
+  chip.style.cursor = "pointer";
+  chip.textContent = "Suggest a strong password (PeerVault)";
+
+  let panel: HTMLDivElement | null = null;
+
+  chip.addEventListener("click", () => {
+    if (panel) return;
+    panel = buildSuggestionPanel(passwordFields, () => {
+      panel?.remove();
+      panel = null;
+      chip.remove();
+    });
+    chip.after(panel);
+  });
+
+  document.body.appendChild(chip);
+}
+
+function buildSuggestionPanel(passwordFields: FoundField[], onDone: () => void): HTMLDivElement {
+  const panel = document.createElement("div");
+  Object.assign(panel.style, {
+    position: "absolute",
+    zIndex: "2147483647",
+    background: "#1a1a2e",
+    color: "white",
+    padding: "10px 12px",
+    borderRadius: "8px",
+    fontSize: "12px",
+    fontFamily: "system-ui, sans-serif",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+    width: "220px",
+  });
+  const anchorRect = passwordFields[0].input.getBoundingClientRect();
+  panel.style.top = `${window.scrollY + anchorRect.bottom + 6}px`;
+  panel.style.left = `${window.scrollX + anchorRect.left}px`;
+
+  const preview = document.createElement("div");
+  Object.assign(preview.style, { fontFamily: "monospace", wordBreak: "break-all", marginBottom: "6px", fontSize: "13px" });
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = "8";
+  slider.max = "32";
+  slider.value = "16";
+  slider.style.width = "100%";
+
+  const lengthLabel = document.createElement("div");
+  lengthLabel.style.marginBottom = "6px";
+
+  const useBtn = document.createElement("button");
+  useBtn.textContent = "Use this password";
+  Object.assign(useBtn.style, { cursor: "pointer", border: "none", borderRadius: "4px", padding: "5px 8px", background: "#4b4bff", color: "white", width: "100%" });
+
+  let current = generateStrongPassword(Number(slider.value));
+  const refresh = () => {
+    lengthLabel.textContent = `${slider.value} characters`;
+    current = generateStrongPassword(Number(slider.value));
+    preview.textContent = current;
+  };
+  refresh();
+
+  slider.addEventListener("input", refresh);
+  useBtn.addEventListener("click", () => {
+    for (const field of passwordFields) {
+      field.input.value = current;
+      field.input.dispatchEvent(new Event("input", { bubbles: true }));
+      field.input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    onDone();
+  });
+
+  panel.append(preview, slider, lengthLabel, useBtn);
+  return panel;
+}
+
+// ---------------------------------------------------------------------
+// Save-on-submit — relayed through the background script because a form
+// submit almost always navigates away before the user could ever click a
+// banner rendered directly on the submitting page.
+// ---------------------------------------------------------------------
+
 function watchForCredentialSubmission() {
+  const submitHandler = () => {
+    const fields = findCandidateFields(document);
+    const passwordField = fields.find((f) => f.kind === "password");
+    if (!passwordField || !passwordField.input.value) return;
+
+    const usernameField = fields.find((f) => f.kind === "username");
+    
+    // Fire-and-forget: intentionally not awaited, since the page may
+    // navigate within the same tick and there'd be nothing left to
+    // await for anyway. The background script takes it from here.
+    chrome.runtime.sendMessage({
+      type: "PENDING_SAVE",
+      domain: getDomain(),
+      username: usernameField?.input.value ?? "",
+      password: passwordField.input.value,
+    });
+  };
+
+  // 1. Standard HTML form submit
   document.addEventListener(
     "submit",
     (event) => {
-      const form = event.target;
-      if (!(form instanceof HTMLFormElement)) return;
-      const fields = findCandidateFields(form);
-      const passwordField = fields.find((f) => f.kind === "password");
-      const usernameField = fields.find((f) => f.kind === "username");
-      if (!passwordField || !passwordField.input.value) return;
-
-      showSaveBanner(passwordField.input, getDomain(), usernameField?.input.value ?? "", passwordField.input.value);
+      submitHandler();
     },
     true,
   );
+
+  // 2. Button clicks (likely login/submit buttons in SPAs without <form>)
+  document.addEventListener(
+    "click",
+    (e) => {
+      const target = e.target as HTMLElement;
+      const button = target.closest("button") || target.closest("input[type='submit']") || target.closest("input[type='button']");
+      if (button) {
+        const txt = button.textContent?.toLowerCase() || (button as HTMLInputElement).value?.toLowerCase() || "";
+        if (txt.includes("log") || txt.includes("sign") || txt.includes("submit") || txt.includes("continue") || txt.includes("next")) {
+          submitHandler();
+        } else {
+          // Even if we don't recognize the text, if there's a filled password field, it might be a login
+          const fields = findCandidateFields(document);
+          const pw = fields.find(f => f.kind === "password");
+          if (pw && pw.input.value) submitHandler();
+        }
+      }
+    },
+    true
+  );
+
+  // 3. Enter key in an input field (Common for SPAs that capture keydown instead of submit)
+  document.addEventListener(
+    "keypress",
+    (e) => {
+      if (e.key === "Enter") {
+        submitHandler();
+      }
+    },
+    true
+  );
 }
 
-function showSaveBanner(anchorInput: HTMLInputElement, domain: string, username: string, password: string) {
-  const banner = makeFloatingEl(anchorInput, 8);
+function showSaveBanner(domain: string, username: string, password: string) {
+  if (document.getElementById("peervault-save-banner")) return;
+  const anchor = findCandidateFields().find((f) => f.kind === "password")?.input ?? null;
+  const banner = makeFloatingEl(anchor, 8);
+  banner.id = "peervault-save-banner";
   banner.style.display = "flex";
   banner.style.alignItems = "center";
   banner.style.gap = "10px";
@@ -130,6 +376,10 @@ function showSaveBanner(anchorInput: HTMLInputElement, domain: string, username:
   const label = document.createElement("span");
   label.textContent = `Save password for ${domain}${username ? ` (${username})` : ""} to PeerVault?`;
   banner.appendChild(label);
+
+  const resolveSave = () => {
+    chrome.runtime.sendMessage({ type: "SAVE_RESOLVED" }).catch(() => {});
+  };
 
   const saveBtn = document.createElement("button");
   saveBtn.textContent = "Save";
@@ -140,19 +390,33 @@ function showSaveBanner(anchorInput: HTMLInputElement, domain: string, username:
     dismissBtn.remove();
     const result = await chrome.runtime.sendMessage({ type: "CAPTURE_CREDENTIAL", domain, username, password });
     label.textContent = result?.saved ? "Saved to PeerVault." : "Couldn't save — is PeerVault paired?";
+    resolveSave();
     setTimeout(() => banner.remove(), 2500);
   });
 
   const dismissBtn = document.createElement("button");
   dismissBtn.textContent = "Not now";
   Object.assign(dismissBtn.style, { cursor: "pointer", border: "none", borderRadius: "4px", padding: "4px 8px", background: "#444", color: "white" });
-  dismissBtn.addEventListener("click", () => banner.remove());
+  dismissBtn.addEventListener("click", () => {
+    banner.remove();
+    resolveSave();
+  });
 
   banner.appendChild(saveBtn);
   banner.appendChild(dismissBtn);
   document.body.appendChild(banner);
-  setTimeout(() => banner.remove(), 20000);
+  
+  setTimeout(() => {
+    if (banner.parentElement) {
+      banner.remove();
+      resolveSave();
+    }
+  }, 20000);
 }
+
+// ---------------------------------------------------------------------
+// Fill + message plumbing
+// ---------------------------------------------------------------------
 
 /** Fills the best-guess username/password fields on this page. Only ever
  * called with plaintext already approved by the phone (see
@@ -177,15 +441,39 @@ function fillCredential(username: string, password: string): boolean {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "FILL_CREDENTIAL") {
     const filled = fillCredential(message.username ?? "", message.password ?? "");
-    sendResponse({ filled });
+    if (filled) {
+      // Only respond if we ACTUALLY filled it. If we didn't, leave the channel open
+      // so that another iframe on the page that DOES have the form can respond first!
+      sendResponse({ filled: true });
+    }
+    // Return true to keep the message channel open for potential async responses from other frames
+    // or just let it timeout if no frame had the form.
+    return true; 
+  }
+  if (message?.type === "SHOW_SAVE_BANNER") {
+    showSaveBanner(message.domain ?? "", message.username ?? "", message.password ?? "");
+    return false;
   }
   return false;
 });
 
 offerAutofill();
+offerNewPasswordSuggestion();
 watchForCredentialSubmission();
 
 // Re-check when the page's DOM changes significantly (SPA login modals
-// that appear after initial load).
-const observer = new MutationObserver(() => offerAutofill());
+// that appear after initial load). Debounced hard: an un-debounced
+// MutationObserver on `document.body` re-running two chip-detection
+// passes (each walking every <input> and messaging the background
+// script) on EVERY DOM mutation is what was making pages feel laggy —
+// sites with any amount of dynamic content (ads, React re-renders, etc.)
+// mutate the DOM dozens of times per second.
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+const observer = new MutationObserver(() => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    offerAutofill();
+    offerNewPasswordSuggestion();
+  }, 400);
+});
 observer.observe(document.body, { childList: true, subtree: true });

@@ -13,10 +13,25 @@
 
     <main>
       <section id="lockedView" class="hidden">
-        <p>Vault not paired with this browser yet.</p>
-        <p class="hint">Open PeerVault on your phone → Trusted devices → Pair new device, then paste the pairing code shown there (or use "Copy as text" if your phone shows that option instead of a QR you can scan here).</p>
-        <textarea id="pairingInput" rows="3" placeholder="peervault-pair:v2:..."></textarea>
-        <button id="pairButton">Pair this browser</button>
+        <h2>Link your browser</h2>
+        <p class="hint">To seamlessly sync passwords, you need to pair this browser to your phone's PeerVault.</p>
+        
+        <input id="deviceNameInput" type="text" placeholder="Name this device (e.g. Work laptop - Brave)" />
+        
+        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
+          <h3 style="margin-top:0;">Option 1: Pair over Wi-Fi</h3>
+          <p class="hint">Enter your phone's Local IP address (shown on its Sync screen) to connect instantly over Wi-Fi.</p>
+          <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" />
+          <button id="lanPairButton">Pair over Wi-Fi</button>
+        </div>
+
+        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
+          <h3 style="margin-top:0;">Option 2: Paste Code</h3>
+          <p class="hint">Alternatively, open <i>Trusted devices → Pair new device</i> on the phone, and paste the code here.</p>
+          <textarea id="pairingInput" rows="3" placeholder="peervault-pair:v2:..."></textarea>
+          <button id="pairButton">Pair via code</button>
+        </div>
+
         <p id="pairStatus" class="hint"></p>
       </section>
 
@@ -28,10 +43,62 @@
         <p id="syncStatus" class="hint"></p>
       </section>
 
+      <nav id="mainNav" class="hidden">
+        <button id="navPasswords" class="nav-btn active">Passwords</button>
+        <button id="navDevices" class="nav-btn">Devices</button>
+        <button id="navImport" class="nav-btn">Import</button>
+      </nav>
+
       <section id="searchView" class="hidden">
         <input id="searchInput" type="text" placeholder="Search saved passwords…" />
         <ul id="resultsList"></ul>
         <p id="emptyHint" class="hint hidden">No saved passwords yet — add one from the phone app, or submit a login form on any site to capture it here.</p>
+        <button id="showAddEntryButton" class="secondary">+ Add new entry</button>
+      </section>
+
+      <section id="addEntrySection" class="hidden">
+        <h2 id="entryEditorTitle">New entry</h2>
+        <input id="newWebsiteInput" type="text" placeholder="Website (e.g. github.com)" />
+        <input id="newUsernameInput" type="text" placeholder="Username or email" />
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input id="newPasswordInput" type="text" placeholder="Password" style="flex:1;" />
+        </div>
+        <input id="newPasswordLengthSlider" type="range" min="8" max="32" value="20" />
+        <p id="newPasswordLengthLabel" class="hint">20 characters</p>
+        <button id="regeneratePasswordButton" class="secondary">Generate new password</button>
+        <button id="saveNewEntryButton">Save entry</button>
+        <button id="cancelAddEntryButton" class="secondary">Cancel</button>
+        <p id="addEntryStatus" class="hint"></p>
+      </section>
+
+      <section id="importSection" class="hidden">
+        <h2>Import from browser</h2>
+        <p class="hint">
+          Chrome/Brave: <code>Settings → Autofill → Password Manager → ⋮ → Export passwords</code>, then pick that
+          CSV file here. Nothing is uploaded anywhere — it's parsed and encrypted locally, right here.
+        </p>
+        <input id="importFileInput" type="file" accept=".csv" />
+        <p id="importStatus" class="hint"></p>
+      </section>
+
+      <section id="pairNewDeviceSection" class="hidden">
+        <h2>Pair a new device</h2>
+        <p class="hint">Lost your phone? This browser already holds the vault — generate a pairing code here and scan/type it into a brand-new phone's "Pair device" screen, no old phone required.</p>
+        <button id="generatePairingButton" class="secondary">Generate pairing code</button>
+        <div id="pairingOutput" class="hidden">
+          <p class="hint">Scan this QR code with the new device, or enter the text below instead:</p>
+          <div style="text-align: center; margin: 12px 0;">
+            <canvas id="pairingQrCanvas" style="background: white; padding: 8px; border-radius: 8px;"></canvas>
+          </div>
+          <textarea id="pairingOutputText" rows="3" readonly></textarea>
+          <button id="copyPairingButton" class="secondary">Copy</button>
+        </div>
+      </section>
+
+      <section id="devicesSection" class="hidden">
+        <h2>Linked devices</h2>
+        <ul id="devicesList"></ul>
+        <p id="devicesEmptyHint" class="hint hidden">No other devices seen yet — sync at least once to learn about them.</p>
       </section>
     </main>
 

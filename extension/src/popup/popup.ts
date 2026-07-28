@@ -1,5 +1,6 @@
-import { syncWithPhone } from "../lib/sync-client.js";
 import { ExtensionStorage } from "../lib/storage.js";
+import { qrcodegen } from "../lib/qrcodegen.js";
+import { requestLanPairing } from "../lib/pairing-client.js";
 
 interface EntryMeta {
   uuid: string;
@@ -18,9 +19,46 @@ const emptyHint = document.getElementById("emptyHint") as HTMLParagraphElement;
 const hostInput = document.getElementById("hostInput") as HTMLInputElement;
 const syncButton = document.getElementById("syncButton") as HTMLButtonElement;
 const syncStatus = document.getElementById("syncStatus") as HTMLParagraphElement;
+const deviceNameInput = document.getElementById("deviceNameInput") as HTMLInputElement;
 const pairingInput = document.getElementById("pairingInput") as HTMLTextAreaElement;
 const pairButton = document.getElementById("pairButton") as HTMLButtonElement;
+const lanPairHostInput = document.getElementById("lanPairHostInput") as HTMLInputElement;
+const lanPairButton = document.getElementById("lanPairButton") as HTMLButtonElement;
 const pairStatus = document.getElementById("pairStatus") as HTMLParagraphElement;
+
+const pairNewDeviceSection = document.getElementById("pairNewDeviceSection") as HTMLElement;
+const generatePairingButton = document.getElementById("generatePairingButton") as HTMLButtonElement;
+const pairingOutput = document.getElementById("pairingOutput") as HTMLElement;
+const pairingQrCanvas = document.getElementById("pairingQrCanvas") as HTMLCanvasElement;
+const pairingOutputText = document.getElementById("pairingOutputText") as HTMLTextAreaElement;
+const copyPairingButton = document.getElementById("copyPairingButton") as HTMLButtonElement;
+
+const mainNav = document.getElementById("mainNav") as HTMLElement;
+const navPasswords = document.getElementById("navPasswords") as HTMLButtonElement;
+const navDevices = document.getElementById("navDevices") as HTMLButtonElement;
+const navImport = document.getElementById("navImport") as HTMLButtonElement;
+
+const devicesSection = document.getElementById("devicesSection") as HTMLElement;
+const devicesList = document.getElementById("devicesList") as HTMLUListElement;
+const devicesEmptyHint = document.getElementById("devicesEmptyHint") as HTMLParagraphElement;
+
+const importSection = document.getElementById("importSection") as HTMLElement;
+const importFileInput = document.getElementById("importFileInput") as HTMLInputElement;
+const importStatus = document.getElementById("importStatus") as HTMLParagraphElement;
+
+const showAddEntryButton = document.getElementById("showAddEntryButton") as HTMLButtonElement;
+const addEntrySection = document.getElementById("addEntrySection") as HTMLElement;
+const newWebsiteInput = document.getElementById("newWebsiteInput") as HTMLInputElement;
+const newUsernameInput = document.getElementById("newUsernameInput") as HTMLInputElement;
+const newPasswordInput = document.getElementById("newPasswordInput") as HTMLInputElement;
+const newPasswordLengthSlider = document.getElementById("newPasswordLengthSlider") as HTMLInputElement;
+const newPasswordLengthLabel = document.getElementById("newPasswordLengthLabel") as HTMLParagraphElement;
+const regeneratePasswordButton = document.getElementById("regeneratePasswordButton") as HTMLButtonElement;
+const saveNewEntryButton = document.getElementById("saveNewEntryButton") as HTMLButtonElement;
+const cancelAddEntryButton = document.getElementById("cancelAddEntryButton") as HTMLButtonElement;
+const addEntryStatus = document.getElementById("addEntryStatus") as HTMLParagraphElement;
+const entryEditorTitle = document.getElementById("entryEditorTitle") as HTMLHeadingElement;
+let editUuid: string | null = null;
 
 /** Human-readable text for every outcome the background script can report
  * back from a gated action — every single one of these means "the phone
@@ -42,9 +80,57 @@ async function refreshStatus() {
   const paired = Boolean(response?.unlocked);
   statusEl.textContent = paired ? "unlocked" : "not paired";
   lockedView.classList.toggle("hidden", paired);
+  mainNav.classList.toggle("hidden", !paired);
   phoneSection.classList.toggle("hidden", !paired);
-  searchView.classList.toggle("hidden", !paired);
-  if (paired) await runSearch("");
+  pairNewDeviceSection.classList.toggle("hidden", !paired);
+  if (paired) {
+    showView("passwords");
+    await runSearch("");
+  }
+}
+
+type ViewName = "passwords" | "devices" | "import";
+
+function showView(view: ViewName) {
+  searchView.classList.toggle("hidden", view !== "passwords");
+  addEntrySection.classList.add("hidden"); // always closed when switching views
+  devicesSection.classList.toggle("hidden", view !== "devices");
+  importSection.classList.toggle("hidden", view !== "import");
+  for (const [btn, name] of [[navPasswords, "passwords"], [navDevices, "devices"], [navImport, "import"]] as const) {
+    btn.classList.toggle("active", name === view);
+  }
+  if (view === "devices") renderDevices();
+}
+
+navPasswords.addEventListener("click", () => showView("passwords"));
+navDevices.addEventListener("click", () => showView("devices"));
+navImport.addEventListener("click", () => showView("import"));
+
+interface KnownDevice {
+  deviceId: string;
+  displayName: string;
+  platform: string;
+  pairedAt: string;
+  lastSyncedAt: string;
+  revoked: boolean;
+}
+
+async function renderDevices() {
+  const [devices, selfId] = await Promise.all([ExtensionStorage.getDeviceList(), ExtensionStorage.getDeviceId()]);
+  const others = (devices as KnownDevice[]).filter((d) => d.deviceId !== selfId);
+  devicesList.innerHTML = "";
+  devicesEmptyHint.classList.toggle("hidden", others.length > 0);
+  for (const d of others) {
+    const li = document.createElement("li");
+    const name = document.createElement("div");
+    name.className = "device-name";
+    name.textContent = d.displayName + (d.revoked ? " (revoked)" : "");
+    const meta = document.createElement("div");
+    meta.className = "device-meta";
+    meta.textContent = `${d.platform} • last synced ${new Date(d.lastSyncedAt).toLocaleString()}`;
+    li.append(name, meta);
+    devicesList.appendChild(li);
+  }
 }
 
 function renderEntries(entries: EntryMeta[]) {
@@ -78,7 +164,13 @@ function renderEntries(entries: EntryMeta[]) {
     copyButton.title = "Ask your phone to approve copying this password";
     copyButton.addEventListener("click", () => handleCopy(entry, copyButton));
 
-    actions.append(fillButton, copyButton);
+    const editButton = document.createElement("button");
+    editButton.className = "secondary";
+    editButton.textContent = "Edit";
+    editButton.title = "Ask your phone to approve editing this entry";
+    editButton.addEventListener("click", () => handleEdit(entry, editButton));
+
+    actions.append(fillButton, copyButton, editButton);
     li.append(info, actions);
     resultsList.appendChild(li);
   }
@@ -118,6 +210,30 @@ async function handleCopy(entry: EntryMeta, button: HTMLButtonElement) {
   }
 }
 
+async function handleEdit(entry: EntryMeta, button: HTMLButtonElement) {
+  button.disabled = true;
+  syncStatus.textContent = `Waiting for approval on your phone to edit ${entry.websiteName}…`;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "REVEAL_PASSWORD", uuid: entry.uuid });
+    if (response?.ok) {
+      syncStatus.textContent = "";
+      showView("passwords");
+      addEntrySection.classList.remove("hidden");
+      
+      entryEditorTitle.textContent = "Edit entry";
+      editUuid = entry.uuid;
+      newWebsiteInput.value = entry.websiteName || entry.websiteUrl || "";
+      newUsernameInput.value = entry.username || "";
+      newPasswordInput.value = response.password as string;
+      addEntryStatus.textContent = "";
+    } else {
+      syncStatus.textContent = OUTCOME_MESSAGES[response?.outcome as string] ?? "Edit request failed.";
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function runSearch(query: string) {
   const response = await chrome.runtime.sendMessage({ type: "LIST_ALL_ENTRIES", query });
   renderEntries((response?.entries ?? []) as EntryMeta[]);
@@ -130,14 +246,13 @@ syncButton.addEventListener("click", async () => {
   if (!value) return;
   const [host, portStr] = value.split(":");
   const port = Number(portStr) || 51827;
-  await ExtensionStorage.saveLastHost(`${host}:${port}`);
   syncStatus.textContent = "Syncing…";
-  try {
-    const result = await syncWithPhone(host, port);
-    syncStatus.textContent = `Synced — pulled ${result.pulled}, pushed ${result.pushed}`;
+  const response = await chrome.runtime.sendMessage({ type: "SYNC_WITH_PHONE", host, port });
+  if (response?.ok) {
+    syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
     await runSearch(searchInput.value);
-  } catch (e) {
-    syncStatus.textContent = `Sync failed: ${(e as Error).message}`;
+  } else {
+    syncStatus.textContent = `Sync failed: ${response?.error ?? "unknown error"}`;
   }
 });
 
@@ -145,7 +260,7 @@ pairButton.addEventListener("click", async () => {
   const value = pairingInput.value.trim();
   if (!value) return;
   pairStatus.textContent = "Pairing…";
-  const response = await chrome.runtime.sendMessage({ type: "COMPLETE_PAIRING", payload: value });
+  const response = await chrome.runtime.sendMessage({ type: "COMPLETE_PAIRING", payload: value, deviceName: deviceNameInput.value });
   if (response.paired) {
     pairStatus.textContent = "Paired!";
     await refreshStatus();
@@ -154,7 +269,274 @@ pairButton.addEventListener("click", async () => {
   }
 });
 
+lanPairButton.addEventListener("click", async () => {
+  const rawHost = lanPairHostInput.value.trim();
+  if (!rawHost) {
+    pairStatus.textContent = "Error: Please enter the phone's IP (e.g. 192.168.1.5:51827)";
+    return;
+  }
+  const name = deviceNameInput.value.trim() || "Paired Browser";
+  const parts = rawHost.split(":");
+  const host = parts[0];
+  const port = parseInt(parts[1] || "51827", 10);
+
+  pairStatus.textContent = "Connecting to phone...";
+  lanPairButton.textContent = "Connecting...";
+  lanPairButton.disabled = true;
+
+  try {
+    const outcome = await requestLanPairing(host, port, name, (pin) => {
+      pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
+    });
+
+    if (!outcome.success) {
+      pairStatus.textContent = `Pairing failed: ${outcome.reason}`;
+      lanPairButton.textContent = "Pair over Wi-Fi";
+      lanPairButton.disabled = false;
+      return;
+    }
+
+    pairStatus.textContent = "Success! Parsing vault key...";
+    const res = await chrome.runtime.sendMessage({ 
+      type: "COMPLETE_LAN_PAIRING", 
+      wrappedVek: outcome.wrappedVek, 
+      sharedSecretArray: Array.from(outcome.sharedSecret),
+      deviceName: name 
+    });
+    
+    if (res?.paired) {
+      pairStatus.textContent = "Paired successfully! Syncing devices...";
+      await chrome.runtime.sendMessage({ type: "SYNC_WITH_PHONE", host, port });
+      pairStatus.textContent = "Paired and synced successfully!";
+      await refreshStatus();
+    } else {
+      pairStatus.textContent = `Pairing failed: ${res?.error ?? "unknown error"}`;
+      lanPairButton.textContent = "Pair over Wi-Fi";
+      lanPairButton.disabled = false;
+    }
+  } catch (e) {
+    pairStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
+    lanPairButton.textContent = "Pair over Wi-Fi";
+    lanPairButton.disabled = false;
+  }
+});
+
+generatePairingButton.addEventListener("click", async () => {
+  generatePairingButton.disabled = true;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "CREATE_PAIRING_PACKAGE" });
+    if (response?.ok) {
+      pairingOutputText.value = response.encoded;
+      
+      const qr = qrcodegen.QrCode.encodeText(response.encoded, qrcodegen.QrCode.Ecc.MEDIUM);
+      const scale = 3;
+      const border = 2;
+      pairingQrCanvas.width = (qr.size + border * 2) * scale;
+      pairingQrCanvas.height = (qr.size + border * 2) * scale;
+      const ctx = pairingQrCanvas.getContext("2d")!;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, pairingQrCanvas.width, pairingQrCanvas.height);
+      ctx.fillStyle = "#000000";
+      for (let y = 0; y < qr.size; y++) {
+        for (let x = 0; x < qr.size; x++) {
+          if (qr.getModule(x, y)) {
+            ctx.fillRect((x + border) * scale, (y + border) * scale, scale, scale);
+          }
+        }
+      }
+
+      pairingOutput.classList.remove("hidden");
+    } else {
+      pairStatus.textContent = response?.error ?? "Could not generate a pairing code.";
+    }
+  } finally {
+    generatePairingButton.disabled = false;
+  }
+});
+
+copyPairingButton.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(pairingOutputText.value);
+  copyPairingButton.textContent = "Copied!";
+  setTimeout(() => (copyPairingButton.textContent = "Copy"), 1500);
+});
+
 refreshStatus();
 ExtensionStorage.getLastHost().then((host) => {
   if (host) hostInput.value = host;
+});
+
+// ---------------------------------------------------------------------
+// Add new entry + password generator
+// ---------------------------------------------------------------------
+
+/** Same rejection-sampled generator as content/detect.ts's new-password
+ * suggestion — duplicated rather than shared because the popup and
+ * content-script bundles are compiled independently and this is a dozen
+ * lines, not worth a shared-chunk build step for. */
+function generateStrongPassword(length: number): string {
+  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+";
+  const cutoff = 256 - (256 % charset.length);
+  const buf = new Uint8Array(1);
+  let result = "";
+  while (result.length < length) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < cutoff) result += charset[buf[0] % charset.length];
+  }
+  return result;
+}
+
+function refreshGeneratedPassword() {
+  const length = Number(newPasswordLengthSlider.value);
+  newPasswordLengthLabel.textContent = `${length} characters`;
+  newPasswordInput.value = generateStrongPassword(length);
+}
+
+showAddEntryButton.addEventListener("click", () => {
+  showView("passwords"); // closes devices/import if open, keeps searchView visible behind the form
+  addEntrySection.classList.remove("hidden");
+  entryEditorTitle.textContent = "New entry";
+  editUuid = null;
+  newWebsiteInput.value = "";
+  newUsernameInput.value = "";
+  addEntryStatus.textContent = "";
+  refreshGeneratedPassword();
+});
+
+newPasswordLengthSlider.addEventListener("input", refreshGeneratedPassword);
+regeneratePasswordButton.addEventListener("click", refreshGeneratedPassword);
+
+cancelAddEntryButton.addEventListener("click", () => {
+  addEntrySection.classList.add("hidden");
+});
+
+saveNewEntryButton.addEventListener("click", async () => {
+  const domain = newWebsiteInput.value.trim();
+  const username = newUsernameInput.value.trim();
+  const password = newPasswordInput.value;
+  if (!domain || !password) {
+    addEntryStatus.textContent = "Website and password are required.";
+    return;
+  }
+  saveNewEntryButton.disabled = true;
+  try {
+    const targetType = editUuid ? "UPDATE_CREDENTIAL" : "CAPTURE_CREDENTIAL";
+    const payload = editUuid ? { type: targetType, uuid: editUuid, domain, username, password } : { type: targetType, domain, username, password };
+    
+    const response = await chrome.runtime.sendMessage(payload);
+    if (response?.saved) {
+      addEntryStatus.textContent = "Saved.";
+      addEntrySection.classList.add("hidden");
+      await runSearch(searchInput.value);
+    } else {
+      addEntryStatus.textContent = OUTCOME_MESSAGES[response?.reason as string] ?? "Could not save.";
+    }
+  } finally {
+    saveNewEntryButton.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------
+// Import from Chrome/Brave CSV export
+// ---------------------------------------------------------------------
+
+/** Minimal CSV parser handling quoted fields and escaped quotes (`""`),
+ * which is exactly what Chrome/Brave/Edge's password-export CSV uses.
+ * Not a general CSV library — deliberately just enough for this format:
+ * header row `name,url,username,password[,note]`. */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"' && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (c === '"') {
+        inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows.filter((r) => r.some((cell) => cell.trim().length > 0));
+}
+
+importFileInput.addEventListener("change", async () => {
+  const file = importFileInput.files?.[0];
+  if (!file) return;
+
+  importStatus.textContent = "Reading file…";
+  const text = await file.text();
+  const rows = parseCsv(text);
+  if (rows.length < 2) {
+    importStatus.textContent = "That file doesn't look like a password export (no data rows found).";
+    importFileInput.value = "";
+    return;
+  }
+
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const urlIdx = header.indexOf("url");
+  const userIdx = header.indexOf("username");
+  const passIdx = header.indexOf("password");
+  const nameIdx = header.indexOf("name");
+  if (urlIdx === -1 || userIdx === -1 || passIdx === -1) {
+    importStatus.textContent = 'Unrecognized CSV format — expected columns "url", "username", "password".';
+    importFileInput.value = "";
+    return;
+  }
+
+  let saved = 0;
+  let skipped = 0;
+  const dataRows = rows.slice(1);
+  for (let i = 0; i < dataRows.length; i++) {
+    const cols = dataRows[i];
+    const url = cols[urlIdx]?.trim();
+    const username = cols[userIdx]?.trim() ?? "";
+    const password = cols[passIdx]?.trim();
+    if (!url || !password) {
+      skipped++;
+      continue;
+    }
+    let domain = url;
+    try {
+      domain = new URL(url).hostname || url;
+    } catch {
+      // Not a full URL (some exports just have a bare domain) — use as-is.
+    }
+    const websiteName = nameIdx !== -1 && cols[nameIdx]?.trim() ? cols[nameIdx].trim() : domain;
+    const response = await chrome.runtime.sendMessage({
+      type: "CAPTURE_CREDENTIAL",
+      domain: websiteName || domain,
+      username,
+      password,
+    });
+    if (response?.saved) saved++; else skipped++;
+    importStatus.textContent = `Importing… ${i + 1}/${dataRows.length}`;
+  }
+
+  importStatus.textContent = `Imported ${saved} entr${saved === 1 ? "y" : "ies"}${skipped ? `, skipped ${skipped}` : ""}. ` +
+    "Consider deleting the exported CSV file now — it was plaintext on disk.";
+  importFileInput.value = "";
+  await runSearch(searchInput.value);
 });

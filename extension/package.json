@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && npm run copy-assets",
-    "copy-assets": "mkdir -p dist/popup dist/icons && cp src/popup/popup.html dist/popup/ && cp src/popup/popup.css dist/popup/ && cp public/manifest.json dist/ && cp public/icons/* dist/icons/",
+    "copy-assets": "node copy-assets.js",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

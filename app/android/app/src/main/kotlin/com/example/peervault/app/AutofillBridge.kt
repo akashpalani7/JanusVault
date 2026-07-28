@@ -67,15 +67,19 @@ object AutofillBridge {
 
                 val methodChannel = MethodChannel(newEngine.dartExecutor.binaryMessenger, CHANNEL_NAME)
                 methodChannel.setMethodCallHandler { call, result ->
-                    if (call.method == "ready") {
-                        engine = newEngine
-                        channel = methodChannel
-                        result.success(null)
-                        if (!deferred.isCompleted) deferred.complete(Unit)
-                    } else {
-                        // Requests FROM Dart back to native aren't used today,
-                        // but the handler must exist to avoid MissingPluginException.
-                        result.notImplemented()
+                    when (call.method) {
+                        "ready" -> {
+                            engine = newEngine
+                            channel = methodChannel
+                            result.success(null)
+                            if (!deferred.isCompleted) deferred.complete(Unit)
+                        }
+                        "showApprovalNotification" -> {
+                            val actionLabel = (call.arguments as? Map<*, *>)?.get("actionLabel") as? String ?: "access a saved password"
+                            ApprovalNotifier.show(context.applicationContext, actionLabel)
+                            result.success(null)
+                        }
+                        else -> result.notImplemented()
                     }
                 }
             } catch (e: Exception) {
@@ -112,6 +116,28 @@ object AutofillBridge {
             "saveCapturedCredential",
             mapOf("appIdentifier" to appIdentifier, "username" to username, "password" to password),
         ) as Boolean
+    }
+
+    /** Starts the LAN sync listener — see _startSyncListening in
+     * autofill_entrypoint.dart. Called by PeerVaultSyncForegroundService. */
+    suspend fun startSyncListening(context: Context, displayName: String) {
+        ensureReady(context)
+        invoke("startSyncListening", mapOf("displayName" to displayName))
+    }
+
+    suspend fun stopSyncListening(context: Context) {
+        ensureReady(context)
+        invoke("stopSyncListening", null)
+    }
+
+    /** Called from PeerVaultRemoteApprovalActivity once the user has
+     * responded (and, if approving, passed BiometricPrompt) to the
+     * "Approve access from your browser?" notification. Not a suspend
+     * function and doesn't call ensureReady: this only ever gets called
+     * while the engine is definitely already running, because the
+     * notification that led here only exists because the engine posted it. */
+    fun resolveApproval(approved: Boolean) {
+        channel?.invokeMethod("resolveApproval", mapOf("approved" to approved))
     }
 
     private suspend fun invoke(method: String, args: Any?): Any? = suspendCancellableCoroutine { cont ->

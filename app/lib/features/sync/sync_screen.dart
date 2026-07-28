@@ -26,8 +26,18 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
   }
 
   Future<void> _loadSelfAddress() async {
-    final ip = await ref.read(lanSyncServiceProvider).getSelfLanAddress();
+    final service = ref.read(lanSyncServiceProvider);
+    final ip = await service.getSelfLanAddress();
     setState(() => _selfAddress = ip);
+
+    // Auto-host if we aren't already
+    if (!_hosting) {
+      try {
+        await service.startAdvertisingAndServing(
+            deviceDisplayName: 'PeerVault');
+        if (mounted) setState(() => _hosting = true);
+      } catch (_) {}
+    }
   }
 
   Future<void> _toggleHosting() async {
@@ -70,7 +80,7 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
     if (input.isEmpty) return;
     final parts = input.split(':');
     final host = parts.first;
-    final port = parts.length > 1 ? int.tryParse(parts[1]) ?? kSyncPort : kSyncPort;
+    final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 51827 : 51827;
     setState(() => _status = 'Syncing with $host:$port…');
     try {
       await ref.read(lanSyncServiceProvider).syncWithHost(host, port);
@@ -94,11 +104,12 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('This device', style: Theme.of(context).textTheme.titleMedium),
+                  Text('This device',
+                      style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   Text(_selfAddress == null
                       ? 'Not connected to a network'
-                      : 'Address: $_selfAddress:$kSyncPort  (works over WiFi or a phone hotspot)'),
+                      : 'Address: $_selfAddress:${ref.read(lanSyncServiceProvider).boundPort}  (works over WiFi or a phone hotspot)'),
                   const SizedBox(height: 12),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
@@ -113,8 +124,12 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
           const SizedBox(height: 16),
           Row(
             children: [
-              Expanded(child: Text('Nearby devices', style: Theme.of(context).textTheme.titleMedium)),
-              IconButton(icon: const Icon(Icons.refresh), onPressed: _scanning ? null : _scan),
+              Expanded(
+                  child: Text('Nearby devices',
+                      style: Theme.of(context).textTheme.titleMedium)),
+              IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: _scanning ? null : _scan),
             ],
           ),
           if (_scanning) const LinearProgressIndicator(),
@@ -122,21 +137,28 @@ class _SyncScreenState extends ConsumerState<SyncScreen> {
                 leading: const Icon(Icons.smartphone),
                 title: Text(p.name),
                 subtitle: Text('${p.host}:${p.port}'),
-                trailing: FilledButton(onPressed: () => _syncWith(p), child: const Text('Sync')),
+                trailing: FilledButton(
+                    onPressed: () => _syncWith(p), child: const Text('Sync')),
               )),
           const Divider(height: 32),
-          Text('Connect by IP manually', style: Theme.of(context).textTheme.titleMedium),
+          Text('Connect by IP manually',
+              style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
-          const Text('Use this on a hotspot/network where automatic discovery is blocked, '
+          const Text(
+              'Use this on a hotspot/network where automatic discovery is blocked, '
               'or when pairing with the browser extension (type the phone\'s address shown above into the extension popup).'),
           const SizedBox(height: 8),
           TextField(
             controller: _manualHostCtrl,
-            decoration: const InputDecoration(hintText: '192.168.x.x:51827', border: OutlineInputBorder()),
+            decoration: const InputDecoration(
+                hintText: '192.168.x.x:51827', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 8),
-          FilledButton(onPressed: _syncByManualHost, child: const Text('Sync now')),
-          if (_status != null) Padding(padding: const EdgeInsets.only(top: 16), child: Text(_status!)),
+          FilledButton(
+              onPressed: _syncByManualHost, child: const Text('Sync now')),
+          if (_status != null)
+            Padding(
+                padding: const EdgeInsets.only(top: 16), child: Text(_status!)),
         ],
       ),
     );

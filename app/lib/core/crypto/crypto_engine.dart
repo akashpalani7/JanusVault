@@ -216,6 +216,83 @@ class CryptoEngine {
   }
 
   // ---------------------------------------------------------------------
+  // ECDH LAN Pairing (Numeric PIN Comparison)
+  // ---------------------------------------------------------------------
+
+  Future<SimpleKeyPair> generateEcdhKeyPair() async {
+    final ecdh = X25519(); 
+    return await ecdh.newKeyPair();
+  }
+
+  String exportEcdhPublicKey(SimplePublicKey key) {
+    if (key.bytes.length != 32) throw Exception("Invalid X25519 public key");
+    return base64Encode(key.bytes);
+  }
+
+  SimplePublicKey importEcdhPublicKey(String base64Key) {
+    return SimplePublicKey(base64Decode(base64Key), type: KeyPairType.x25519);
+  }
+
+  Future<List<int>> deriveEcdhSharedSecret(SimpleKeyPair privateKey, SimplePublicKey peerKey) async {
+    final ecdh = X25519(); 
+    final secret = await ecdh.sharedSecretKey(keyPair: privateKey, remotePublicKey: peerKey);
+    return secret.extractBytes();
+  }
+
+  Future<String> computeEcdhPin(List<int> sharedSecret) async {
+    final digest = await Hmac.sha256().calculateMac(sharedSecret, secretKey: SecretKey(utf8.encode('PeerVault-PIN')));
+    final view = ByteData.view(Uint8List.fromList(digest.bytes).buffer);
+    final num = view.getUint32(0, Endian.big);
+    final pin = (num % 1000000).toString().padLeft(6, '0');
+    return '${pin.substring(0, 3)}-${pin.substring(3)}';
+  }
+
+  Future<SecretKey> deriveEcdhWrappingKey(List<int> sharedSecret) async {
+    return _hkdf.deriveKey(
+      secretKey: SecretKey(sharedSecret),
+      nonce: utf8.encode('PeerVault-ecdh-pair'),
+      info: utf8.encode('vekwrap'),
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // LAN sync authentication (anti-hijack)
+  // ---------------------------------------------------------------------
+  //
+  // Anyone on the same WiFi can open a raw TCP/WebSocket connection to the
+  // phone's sync port — that's unavoidable for a LAN-discovery design.
+  // What must NOT be possible is a stranger's connection being treated as
+  // a trusted device: getting the device list, pushing fake vault
+  // metadata, or — worst case — triggering the "Approve from your
+  // browser?" biometric prompt to try to social-engineer the user into
+  // approving something they didn't initiate.
+  //
+  // Fix: derive a symmetric key from the VEK itself (which only trusted
+  // devices ever possess) and require a nonce/HMAC handshake — see
+  // LanSyncService's `_performHandshake` — before EITHER side processes
+  // anything else on a freshly opened connection. A device without the
+  // VEK cannot produce a valid HMAC and gets disconnected immediately,
+  // before it ever sees a device list, vault metadata, or an auth prompt.
+
+  static const List<int> _syncAuthSalt = [
+    0x50, 0x65, 0x65, 0x72, 0x56, 0x61, 0x75, 0x6c, 0x74, 0x2d, 0x73, 0x79, 0x6e, 0x63, 0x2d, 0x76, 0x31,
+  ]; // ASCII "PeerVault-sync-v1" — fixed, public domain-separation salt.
+
+  Future<SecretKey> deriveSyncAuthKey(SecretKey vek) {
+    return _hkdf.deriveKey(secretKey: vek, nonce: _syncAuthSalt, info: utf8.encode('peervault-sync-auth-v1'));
+  }
+
+  /// HMAC-SHA256 over a plain string (deliberately NOT over arbitrary
+  /// JSON) — cross-language JSON serialization can silently differ in key
+  /// order/number formatting between Dart and JS, which would make an
+  /// HMAC over serialized JSON fragile in exactly the wrong way. Every
+  /// caller builds an explicit, simple string to MAC instead.
+  Future<Uint8List> hmacSha256(SecretKey key, String data) async {
+    final mac = await Hmac.sha256().calculateMac(utf8.encode(data), secretKey: key);
+    return Uint8List.fromList(mac.bytes);
+  }
+
+  // ---------------------------------------------------------------------
   // Local device key (wraps VEK for at-rest storage on THIS device only)
   // ---------------------------------------------------------------------
 

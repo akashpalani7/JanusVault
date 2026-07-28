@@ -40,7 +40,10 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
       ref.read(vaultUnlockedProvider.notifier).state = true;
 
       if (mounted) {
-        Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const VaultListScreen()));
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const VaultListScreen()),
+          (route) => false,
+        );
       }
     } catch (e) {
       setState(() => _errorMessage = 'Unlock failed: $e');

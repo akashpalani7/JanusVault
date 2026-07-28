@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
+    <!-- Always-on background listener (quick-settings tile toggle) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <application
         android:label="PeerVault"
         android:name="${applicationName}"
@@ -70,6 +76,36 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Transparent activity that runs BiometricPrompt in response to
+             the "Approve from your browser?" notification posted while the
+             app UI isn't open (see ApprovalNotifier / AutofillBridge). -->
+        <activity
+            android:name="com.example.peervault.app.PeerVaultRemoteApprovalActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Translucent"
+            android:excludeFromRecents="true" />
+
+        <!-- Keeps the background engine (and its LAN sync listener) alive
+             with the app fully closed. Toggled by the quick-settings tile
+             below, or the in-app Sync screen. -->
+        <service
+            android:name="com.example.peervault.app.PeerVaultSyncForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Quick Settings tile: long-press the shade, drag in "PeerVault
+             listening" the same way you'd add a WiFi/mobile-data toggle. -->
+        <service
+            android:name="com.example.peervault.app.PeerVaultQuickTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_lock_lock"
+            android:label="PeerVault listening"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

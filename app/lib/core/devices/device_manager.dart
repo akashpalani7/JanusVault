@@ -218,7 +218,9 @@ class DeviceManager {
   }
 
   List<TrustedDevice> listDevices() {
+    final selfId = _db.settings?.selfDeviceId;
     return _db.allDevices
+        .where((r) => r.deviceId != selfId)
         .map((r) => TrustedDevice(
               deviceId: r.deviceId,
               displayName: r.displayName,

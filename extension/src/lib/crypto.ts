@@ -96,6 +96,43 @@ export async function computeRecordHash(params: {
 const PAIRING_SALT = new TextEncoder().encode("PeerVault-pair-v2"); // must match CryptoEngine._pairingSalt exactly
 const PAIRING_INFO = new TextEncoder().encode("peervault-pairing-v2"); // must match CryptoEngine.derivePairingKeyFromCode exactly
 
+// --- LAN sync authentication (anti-hijack) --------------------------------
+// Mirrors CryptoEngine.deriveSyncAuthKey/hmacSha256 exactly (same salt,
+// info, and hash) — see the long comment there for why this exists. Any
+// device that doesn't hold the VEK (i.e. was never actually paired)
+// cannot derive this key and cannot pass the handshake in auth-client.ts /
+// sync-client.ts, so it never gets to see a device list, vault metadata,
+// or trigger an approval prompt on the phone.
+const SYNC_AUTH_SALT = new TextEncoder().encode("PeerVault-sync-v1"); // must match CryptoEngine._syncAuthSalt exactly
+const SYNC_AUTH_INFO = new TextEncoder().encode("peervault-sync-auth-v1");
+
+export async function deriveSyncAuthKey(vek: CryptoKey): Promise<CryptoKey> {
+  const rawVek = await crypto.subtle.exportKey("raw", vek);
+  const keyMaterial = await crypto.subtle.importKey("raw", rawVek, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: SYNC_AUTH_SALT, info: SYNC_AUTH_INFO },
+    keyMaterial,
+    { name: "HMAC", hash: "SHA-256", length: 256 },
+    false,
+    ["sign", "verify"],
+  );
+}
+
+/** HMAC-SHA256 over a plain string — deliberately not over serialized
+ * JSON; see the Dart-side comment for why. */
+export async function hmacSha256(key: CryptoKey, data: string): Promise<string> {
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+  return toBase64(new Uint8Array(signature));
+}
+
+export async function verifyHmacSha256(key: CryptoKey, data: string, macBase64: string): Promise<boolean> {
+  try {
+    return await crypto.subtle.verify("HMAC", key, fromBase64(macBase64) as BufferSource, new TextEncoder().encode(data));
+  } catch {
+    return false;
+  }
+}
+
 export async function deriveKeyFromPairingCode(codeBytes: Uint8Array): Promise<CryptoKey> {
   const keyMaterial = await crypto.subtle.importKey("raw", codeBytes as BufferSource, "HKDF", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
@@ -133,6 +170,53 @@ export function decodePairingCode(printable: string): Uint8Array {
   return bytes;
 }
 
+/** Mirrors CryptoEngine.encodeRecoverySecret exactly (same alphabet, same
+ * bit-packing, same "-" grouping every 5 chars) — used for BOTH recovery
+ * secrets (32 bytes) and pairing codes (16 bytes); the encoding is generic
+ * over input length. */
+export function encodeCrockfordBase32(bytes: Uint8Array): string {
+  let bits = 0n;
+  for (const b of bytes) {
+    bits = (bits << 8n) | BigInt(b);
+  }
+  const totalBits = bytes.length * 8;
+  const chars: string[] = [];
+  let remaining = totalBits;
+  while (remaining > 0) {
+    const take = remaining >= 5 ? 5 : remaining;
+    const shift = BigInt(remaining - take);
+    const mask = (1n << BigInt(take)) - 1n;
+    const chunk = Number((bits >> shift) & mask);
+    chars.push(CROCKFORD_ALPHABET[chunk << (5 - take)]);
+    remaining -= take;
+  }
+  const raw = chars.join("");
+  const grouped: string[] = [];
+  for (let i = 0; i < raw.length; i += 5) {
+    grouped.push(raw.slice(i, Math.min(i + 5, raw.length)));
+  }
+  return grouped.join("-");
+}
+
+/** Generates a brand-new 16-byte pairing code — the extension acting as
+ * the SOURCE device for pairing a new one (e.g. a new phone, after the
+ * old one was lost), mirroring CryptoEngine.generatePairingCode. */
+export function generatePairingCode(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(16));
+}
+
+/** Builds a full pairing package string ("peervault-pair:v2:<code>:<wrappedVek>")
+ * from this browser's own unwrapped VEK, exactly like DeviceManager.createPairingPackage
+ * on the Dart side — so a phone's camera can scan a QR generated FROM the
+ * extension popup, not just the other way around. */
+export async function buildPairingPackage(vek: CryptoKey): Promise<{ printableCode: string; encoded: string }> {
+  const codeBytes = generatePairingCode();
+  const pairingKey = await deriveKeyFromPairingCode(codeBytes);
+  const wrappedForTransit = await wrapVek(vek, pairingKey);
+  const printableCode = encodeCrockfordBase32(codeBytes);
+  return { printableCode, encoded: `peervault-pair:v2:${printableCode}:${wrappedForTransit}` };
+}
+
 /** Parses the full pairing payload from a scanned/typed QR string:
  * "peervault-pair:v2:<code>:<wrappedVek>" */
 export function parsePairingPackage(raw: string): { pairingCodePrintable: string; wrappedVekForTransitBase64: string } {
@@ -141,4 +225,58 @@ export function parsePairingPackage(raw: string): { pairingCodePrintable: string
     throw new Error("Not a valid PeerVault pairing code");
   }
   return { pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3] };
+}
+
+// ---------------------------------------------------------------------
+// ECDH LAN Pairing (Numeric PIN Comparison)
+// ---------------------------------------------------------------------
+
+export async function generateEcdhKeyPair(): Promise<CryptoKeyPair> {
+  return (await crypto.subtle.generateKey(
+    { name: "X25519" },
+    true,
+    ["deriveKey", "deriveBits"]
+  )) as CryptoKeyPair;
+}
+
+export async function exportJwEcdhKey(key: CryptoKey): Promise<string> {
+  const rawBits = await crypto.subtle.exportKey("raw", key);
+  return toBase64(new Uint8Array(rawBits));
+}
+
+export async function deriveEcdhSharedSecret(privateKey: CryptoKey, peerPublicKeyBase64: string): Promise<Uint8Array> {
+  const peerKey = await crypto.subtle.importKey(
+    "raw",
+    fromBase64(peerPublicKeyBase64) as any,
+    { name: "X25519" },
+    false,
+    []
+  );
+  const sharedBits = await crypto.subtle.deriveBits(
+    { name: "X25519", public: peerKey },
+    privateKey,
+    256
+  );
+  return new Uint8Array(sharedBits);
+}
+
+export async function computeEcdhPin(sharedSecret: Uint8Array): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode("PeerVault-PIN") as any, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const hash = await crypto.subtle.sign("HMAC", key, sharedSecret as any);
+  const view = new DataView(hash);
+  const num = view.getUint32(0, false);
+  const pin = (num % 1000000).toString().padStart(6, '0');
+  return `${pin.slice(0, 3)}-${pin.slice(3)}`;
+}
+
+export async function deriveEcdhWrappingKey(sharedSecret: Uint8Array): Promise<CryptoKey> {
+  const keyMaterial = await crypto.subtle.importKey("raw", sharedSecret as any, "HKDF", false, ["deriveKey"]);
+  const PAIRING_SALT = new TextEncoder().encode("PeerVault-ecdh-pair");
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: PAIRING_SALT, info: new TextEncoder().encode("vekwrap") },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
 }

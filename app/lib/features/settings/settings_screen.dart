@@ -1,6 +1,10 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_providers.dart';
 import '../../core/storage/vault_database.dart';
 import '../../core/vault/vault_repository.dart';
 
@@ -33,6 +37,114 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     settings.recycleBinRetentionDays = _retentionDays;
     settings.requireBiometricForReveal = _requireBiometricForReveal;
     await VaultDatabase.instance.saveSettings(settings);
+  }
+  
+  Future<void> _handleImportCsv() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result == null || result.files.single.path == null) return;
+
+    final file = File(result.files.single.path!);
+    final text = await file.readAsString();
+    
+    final rows = _parseCsv(text);
+    if (rows.length < 2) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No password data found in file.")));
+      return;
+    }
+
+    final header = rows[0].map((h) => h.trim().toLowerCase()).toList();
+    final urlIdx = header.indexOf("url");
+    final userIdx = header.indexOf("username");
+    final passIdx = header.indexOf("password");
+    final nameIdx = header.indexOf("name");
+
+    if (urlIdx == -1 || userIdx == -1 || passIdx == -1) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid CSV format (requires url, username, password columns).")));
+      return;
+    }
+
+    int saved = 0;
+    int skipped = 0;
+    
+    for (int i = 1; i < rows.length; i++) {
+      final cols = rows[i];
+      final url = urlIdx < cols.length ? cols[urlIdx].trim() : '';
+      final username = userIdx < cols.length ? cols[userIdx].trim() : '';
+      final password = passIdx < cols.length ? cols[passIdx].trim() : '';
+      
+      if (url.isEmpty || password.isEmpty) {
+        skipped++;
+        continue;
+      }
+      
+      String domain = url;
+      try {
+        if (!url.startsWith('http')) {
+          domain = Uri.parse('https://$url').host;
+        } else {
+          domain = Uri.parse(url).host;
+        }
+        if (domain.isEmpty) domain = url;
+      } catch (_) { }
+      
+      final websiteName = (nameIdx != -1 && nameIdx < cols.length && cols[nameIdx].trim().isNotEmpty) 
+          ? cols[nameIdx].trim() 
+          : domain;
+
+      await VaultRepository.instance.createEntry(
+        websiteName: websiteName,
+        websiteUrl: domain,
+        username: username,
+        password: password,
+      );
+      saved++;
+    }
+
+    if (mounted) {
+      if (saved > 0) {
+        ref.invalidate(filteredEntriesProvider);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imported $saved entries, skipped $skipped.")));
+    }
+  }
+
+  List<List<String>> _parseCsv(String text) {
+    final List<List<String>> rows = [];
+    List<String> row = [];
+    String field = "";
+    bool inQuotes = false;
+
+    for (int i = 0; i < text.length; i++) {
+      final String c = text[i];
+      if (inQuotes) {
+        if (c == '"' && i + 1 < text.length && text[i + 1] == '"') {
+          field += '"';
+          i++;
+        } else if (c == '"') {
+          inQuotes = false;
+        } else {
+          field += c;
+        }
+      } else if (c == '"') {
+        inQuotes = true;
+      } else if (c == ',') {
+        row.add(field);
+        field = "";
+      } else if (c == '\n' || c == '\r') {
+        if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
+        row.add(field);
+        rows.add(row);
+        row = [];
+        field = "";
+      } else {
+        field += c;
+      }
+    }
+    if (field.isNotEmpty || row.isNotEmpty) {
+      row.add(field);
+      rows.add(row);
+    }
+    return rows.where((r) => r.any((cell) => cell.trim().isNotEmpty)).toList();
   }
 
   @override
@@ -81,6 +193,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Purged $purged entries')));
               }
             },
+          ),
+          ListTile(
+            title: const Text('Import from CSV'),
+            subtitle: const Text('Restore passwords exported from Chrome, Brave, or Firefox'),
+            trailing: const Icon(Icons.upload_file_outlined),
+            onTap: _handleImportCsv,
           ),
         ],
       ),

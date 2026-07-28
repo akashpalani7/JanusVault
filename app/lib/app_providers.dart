@@ -16,7 +16,13 @@ final vaultSessionProvider = Provider((ref) => VaultSession.instance);
 final deviceManagerProvider = Provider((ref) => DeviceManager.instance);
 final recoveryServiceProvider = Provider((ref) => RecoveryService.instance);
 final backupServiceProvider = Provider((ref) => BackupService.instance);
-final lanSyncServiceProvider = Provider((ref) => LanSyncService.instance);
+final lanSyncServiceProvider = Provider((ref) {
+  final service = LanSyncService.instance;
+  service.recordsUpdatedCallback = () {
+    ref.invalidate(filteredEntriesProvider);
+  };
+  return service;
+});
 final passwordGeneratorProvider = Provider((ref) => PasswordGenerator.instance);
 
 /// Whether the vault is currently unlocked. UI listens to this to decide
