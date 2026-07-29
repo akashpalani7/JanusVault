@@ -16,6 +16,11 @@ public final class GeneratedPluginRegistrant {
   private static final String TAG = "GeneratedPluginRegistrant";
   public static void registerWith(@NonNull FlutterEngine flutterEngine) {
     try {
+      flutterEngine.getPlugins().add(new com.rohit.ble_peripheral.BlePeripheralPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin ble_peripheral, com.rohit.ble_peripheral.BlePeripheralPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new fr.skyost.bonsoir.BonsoirPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin bonsoir_android, fr.skyost.bonsoir.BonsoirPlugin", e);
@@ -71,9 +76,19 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin mobile_scanner, dev.steenbakker.mobile_scanner.MobileScannerPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new com.pkmnapps.nearby_connections.NearbyConnectionsPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin nearby_connections, com.pkmnapps.nearby_connections.NearbyConnectionsPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new dev.fluttercommunity.plus.network_info.NetworkInfoPlusPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin network_info_plus, dev.fluttercommunity.plus.network_info.NetworkInfoPlusPlugin", e);
+    }
+    try {
+      flutterEngine.getPlugins().add(new com.baseflow.permissionhandler.PermissionHandlerPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin permission_handler_android, com.baseflow.permissionhandler.PermissionHandlerPlugin", e);
     }
     try {
       flutterEngine.getPlugins().add(new dev.fluttercommunity.workmanager.WorkmanagerPlugin());

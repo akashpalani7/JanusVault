@@ -1,6 +1,8 @@
 import { ExtensionStorage } from "../lib/storage.js";
 import { qrcodegen } from "../lib/qrcodegen.js";
-import { requestLanPairing } from "../lib/pairing-client.js";
+import { requestLanPairing, requestBlePairing } from "../lib/pairing-client.js";
+import { unwrapVek } from "../lib/crypto.js";
+import { syncWithBlePhone } from "../lib/sync-client.js";
 
 interface EntryMeta {
   uuid: string;
@@ -18,12 +20,14 @@ const resultsList = document.getElementById("resultsList") as HTMLUListElement;
 const emptyHint = document.getElementById("emptyHint") as HTMLParagraphElement;
 const hostInput = document.getElementById("hostInput") as HTMLInputElement;
 const syncButton = document.getElementById("syncButton") as HTMLButtonElement;
+const syncBleButton = document.getElementById("syncBleButton") as HTMLButtonElement;
 const syncStatus = document.getElementById("syncStatus") as HTMLParagraphElement;
 const deviceNameInput = document.getElementById("deviceNameInput") as HTMLInputElement;
 const pairingInput = document.getElementById("pairingInput") as HTMLTextAreaElement;
 const pairButton = document.getElementById("pairButton") as HTMLButtonElement;
 const lanPairHostInput = document.getElementById("lanPairHostInput") as HTMLInputElement;
 const lanPairButton = document.getElementById("lanPairButton") as HTMLButtonElement;
+const blePairButton = document.getElementById("blePairButton") as HTMLButtonElement;
 const pairStatus = document.getElementById("pairStatus") as HTMLParagraphElement;
 
 const pairNewDeviceSection = document.getElementById("pairNewDeviceSection") as HTMLElement;
@@ -256,6 +260,33 @@ syncButton.addEventListener("click", async () => {
   }
 });
 
+syncBleButton.addEventListener("click", async () => {
+  syncStatus.textContent = "Requesting Bluetooth connection...";
+  
+  const rawKeyBase64 = await ExtensionStorage.getDeviceLocalKeyRaw();
+  const wrappedVek = await ExtensionStorage.getWrappedVek();
+  if (!rawKeyBase64 || !wrappedVek) {
+    syncStatus.textContent = "Error: Not paired.";
+    return;
+  }
+  try {
+    const rawKeyBytes = Uint8Array.from(atob(rawKeyBase64), (c) => c.charCodeAt(0));
+    const deviceLocalKey = await crypto.subtle.importKey("raw", rawKeyBytes, "AES-GCM", false, ["decrypt"]);
+    const vek = await unwrapVek(wrappedVek, deviceLocalKey);
+
+    const response = await syncWithBlePhone(vek);
+    syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
+    await runSearch(searchInput.value);
+  } catch(e) {
+    const msg = (e as Error).message;
+    if (msg.includes("globally disabled") || msg.includes("Bluetooth API is disabled")) {
+      syncStatus.innerHTML = `Bluetooth sync failed: Web Bluetooth API is disabled. Please enable it in <b>chrome://flags/#enable-web-bluetooth</b> or your browser's settings.`;
+    } else {
+      syncStatus.textContent = `Bluetooth sync failed: ${msg}`;
+    }
+  }
+});
+
 pairButton.addEventListener("click", async () => {
   const value = pairingInput.value.trim();
   if (!value) return;
@@ -318,6 +349,67 @@ lanPairButton.addEventListener("click", async () => {
     pairStatus.textContent = `Error: ${e instanceof Error ? e.message : String(e)}`;
     lanPairButton.textContent = "Pair over Wi-Fi";
     lanPairButton.disabled = false;
+  }
+});
+
+blePairButton.addEventListener("click", async () => {
+  const name = deviceNameInput.value.trim() || "Paired Browser";
+
+  pairStatus.textContent = "Connecting to phone...";
+  blePairButton.textContent = "Connecting...";
+  blePairButton.disabled = true;
+
+  try {
+    const outcome = await requestBlePairing(name, (pin) => {
+      pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
+    });
+
+    if (!outcome.success) {
+      if (outcome.reason.includes("globally disabled") || outcome.reason.includes("Bluetooth API is disabled")) {
+        pairStatus.innerHTML = `Pairing failed: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
+      } else if (outcome.reason.includes("User cancelled")) {
+        pairStatus.innerHTML = `Dialog blocked. Chromium often suppresses Bluetooth popups in extension drop-downs. <br><a href="#" id="openPairTab">Open in Full Tab to Fix</a>`;
+        document.getElementById('openPairTab')?.addEventListener('click', () => {
+          chrome.tabs.create({ url: chrome.runtime.getURL("popup/popup.html") });
+        });
+      } else {
+        pairStatus.textContent = `Pairing failed: ${outcome.reason}`;
+      }
+      blePairButton.textContent = "Pair via Bluetooth";
+      blePairButton.disabled = false;
+      return;
+    }
+
+    pairStatus.textContent = "Success! Parsing vault key...";
+    const res = await chrome.runtime.sendMessage({ 
+      type: "COMPLETE_LAN_PAIRING", 
+      wrappedVek: outcome.wrappedVek, 
+      sharedSecretArray: Array.from(outcome.sharedSecret),
+      deviceName: name 
+    });
+    
+    if (res?.paired) {
+      pairStatus.textContent = "Paired successfully!";
+      await refreshStatus();
+    } else {
+      pairStatus.textContent = `Pairing failed: ${res?.error ?? "unknown error"}`;
+      blePairButton.textContent = "Pair via Bluetooth";
+      blePairButton.disabled = false;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("globally disabled") || msg.includes("Bluetooth API is disabled")) {
+      pairStatus.innerHTML = `Error: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
+    } else if (msg.includes("User cancelled")) {
+      pairStatus.innerHTML = `Dialog blocked. <br><a href="#" id="openPairTabFallback">Open in Full Tab to Fix</a>`;
+      document.getElementById('openPairTabFallback')?.addEventListener('click', () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL("popup/popup.html") });
+      });
+    } else {
+      pairStatus.textContent = `Error: ${msg}`;
+    }
+    blePairButton.textContent = "Pair via Bluetooth";
+    blePairButton.disabled = false;
   }
 });
 

@@ -30,8 +30,9 @@ try {
   copyFile('src/popup/popup.html', 'dist/popup/popup.html');
   copyFile('src/popup/popup.css', 'dist/popup/popup.css');
 
-  // 3. Copy manifest
+  // 3. Copy manifest and offscreen HTML
   copyFile('public/manifest.json', 'dist/manifest.json');
+  copyFile('src/offscreen/offscreen-ble.html', 'dist/offscreen/offscreen-ble.html');
 
   // 4. Copy icons
   if (fs.existsSync('public/icons')) {

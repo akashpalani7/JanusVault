@@ -54,6 +54,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.fragment:fragment-ktx:1.6.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // Inline Suggestions API — InlineSuggestionUi builder for keyboard-strip
+    // autofill chips (API 30+). Without this, the import of
+    // androidx.autofill.inline.v1.InlineSuggestionUi fails at compile time.
+    implementation("androidx.autofill:autofill:1.1.0")
 }
 
 

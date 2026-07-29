@@ -26,7 +26,13 @@
         </div>
 
         <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
-          <h3 style="margin-top:0;">Option 2: Paste Code</h3>
+          <h3 style="margin-top:0;">Option 2: Pair via Bluetooth</h3>
+          <p class="hint">Ensure PeerVault is open on your phone with Bluetooth sync enabled.</p>
+          <button id="blePairButton" class="secondary" style="width:100%;">Pair via Bluetooth</button>
+        </div>
+
+        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
+          <h3 style="margin-top:0;">Option 3: Paste Code</h3>
           <p class="hint">Alternatively, open <i>Trusted devices → Pair new device</i> on the phone, and paste the code here.</p>
           <textarea id="pairingInput" rows="3" placeholder="peervault-pair:v2:..."></textarea>
           <button id="pairButton">Pair via code</button>
@@ -38,8 +44,11 @@
       <section id="phoneSection" class="hidden">
         <h2>Phone connection</h2>
         <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's LAN address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
-        <input id="hostInput" type="text" placeholder="192.168.x.x:51827" />
-        <button id="syncButton">Sync now</button>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" style="flex:1;" />
+          <button id="syncButton">Sync via Wi-Fi</button>
+        </div>
+        <button id="syncBleButton" class="secondary" style="width:100%;">Sync via Bluetooth</button>
         <p id="syncStatus" class="hint"></p>
       </section>
 

@@ -1,8 +1,10 @@
 package com.example.peervault.app
 
+import android.app.PendingIntent
 import android.app.assist.AssistStructure
 import android.content.Intent
-import com.example.peervault.MainActivity
+import android.graphics.drawable.Icon
+import android.os.Build
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
 import android.service.autofill.Dataset
@@ -10,6 +12,7 @@ import android.service.autofill.FillCallback
 import android.service.autofill.FillContext
 import android.service.autofill.FillRequest
 import android.service.autofill.FillResponse
+import android.service.autofill.InlinePresentation
 import android.service.autofill.SaveCallback
 import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
@@ -17,26 +20,29 @@ import android.view.View
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
 import android.widget.RemoteViews
+import android.widget.inline.InlinePresentationSpec
+import androidx.annotation.RequiresApi
+import androidx.autofill.inline.UiVersions
+import androidx.autofill.inline.v1.InlineSuggestionUi
+import com.example.peervault.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
- * PeerVault's Android Autofill Framework entry point. This is the "mandatory
- * OS shim" mentioned in the README — it contains NO vault logic itself. It:
- *   1. Walks the AssistStructure to find username/password fields, using
- *      the page's web domain (not the browser's own package name) as the
- *      identifier whenever the structure came from a browser tab.
- *   2. Asks AutofillBridge (-> Dart) for matching vault entries.
- *   3. If the vault is unlocked in-process, returns real Datasets.
- *      If locked, returns a Dataset gated behind biometric auth
- *      (PeerVaultAutofillAuthActivity), which is the standard, OS-blessed
- *      pattern for "unlock to reveal autofill value".
- *   4. Declares SaveInfo on every response so Android actually calls
- *      onSaveRequest after a form submission — without this, "Save to
- *      PeerVault?" can never appear, on any app or in any browser,
- *      regardless of anything else being correct.
+ * PeerVault's Android Autofill Framework entry point.
+ *
+ * Supports two rendering paths:
+ *   1. **Inline Suggestions** (Android 11+ / API 30+): renders autofill
+ *      suggestions as keyboard-strip chips. This is the path that Chromium-
+ *      based browsers (Chrome, Brave, Edge) prefer — the legacy dropdown
+ *      approach causes \"contents cannot be autofilled\" errors in browser
+ *      renderer sandboxes.
+ *   2. **Legacy dropdown** (API 26–29, or when InlineSuggestionsRequest is
+ *      absent): the traditional RemoteViews popup.
+ *
+ * Both paths share the same matching + VEK/Dart bridge logic.
  */
 class PeerVaultAutofillService : AutofillService() {
 
@@ -59,51 +65,83 @@ class PeerVaultAutofillService : AutofillService() {
 
                 val responseBuilder = FillResponse.Builder()
 
+                // Determine whether the keyboard supports inline suggestions
+                val inlineSpecs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    request.inlineSuggestionsRequest?.inlinePresentationSpecs
+                } else null
+                val useInline = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !inlineSpecs.isNullOrEmpty()
+
                 if (unlocked) {
                     val raw = AutofillBridge.searchEntries(applicationContext, query)
                     val json = JSONObject(raw)
                     val entries = json.getJSONArray("entries")
+
                     for (i in 0 until entries.length()) {
                         val entry = entries.getJSONObject(i)
-                        responseBuilder.addDataset(buildDataset(fields, entry.getString("websiteName"), entry.getString("username"), entry.getString("password")))
+                        val websiteName = entry.getString("websiteName")
+                        val username = entry.getString("username")
+                        val password = entry.getString("password")
+
+                        if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            val spec = inlineSpecs!![minOf(i, inlineSpecs.size - 1)]
+                            responseBuilder.addDataset(
+                                buildInlineDataset(fields, websiteName, username, password, spec, i)
+                            )
+                        } else {
+                            responseBuilder.addDataset(
+                                buildDropdownDataset(fields, websiteName, username, password)
+                            )
+                        }
                     }
+
                     if (entries.length() == 0) {
+                        // No matching entries — show "open PeerVault" prompt
                         val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
                             setTextViewText(android.R.id.text1, "No passwords found for $query")
                         }
                         val allIds = listOfNotNull(fields.usernameId, fields.passwordId).toTypedArray()
                         val mainIntent = Intent(applicationContext, MainActivity::class.java)
-                        val pendingIntent = android.app.PendingIntent.getActivity(
+                        val pendingIntent = PendingIntent.getActivity(
                             applicationContext, 1002, mainIntent,
-                            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                         )
                         responseBuilder.setAuthentication(allIds, pendingIntent.intentSender, presentation)
                     }
                 } else {
-                    // Locked: single "Unlock PeerVault" suggestion. Tapping it
-                    // launches PeerVaultAutofillAuthActivity, which performs
-                    // biometric auth and returns the real Dataset via
-                    // setAuthentication's activity-result contract.
+                    // Vault is locked — show unlock prompt.
                     val authIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java)
                     authIntent.putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, query)
-                    val pendingIntent = android.app.PendingIntent.getActivity(
+                    val pendingIntent = PendingIntent.getActivity(
                         applicationContext,
                         1001,
                         authIntent,
-                        android.app.PendingIntent.FLAG_MUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+                        PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
                     )
-                    val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-                        setTextViewText(android.R.id.text1, "Unlock PeerVault to autofill")
-                    }
+
                     val allIds = listOfNotNull(fields.usernameId, fields.passwordId).toTypedArray()
-                    responseBuilder.setAuthentication(allIds, pendingIntent.intentSender, presentation)
+
+                    if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val spec = inlineSpecs!!.first()
+                        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+                            setTextViewText(android.R.id.text1, "Unlock PeerVault")
+                        }
+                        val inlinePresentation = buildInlinePresentation(
+                            spec, "🔒 Unlock PeerVault", "Tap to authenticate", 1001
+                        )
+                        val datasetBuilder = Dataset.Builder()
+                        fields.usernameId?.let { datasetBuilder.setValue(it, AutofillValue.forText(""), presentation, inlinePresentation) }
+                        fields.passwordId?.let { datasetBuilder.setValue(it, AutofillValue.forText(""), presentation, inlinePresentation) }
+                        datasetBuilder.setAuthentication(pendingIntent.intentSender)
+                        responseBuilder.addDataset(datasetBuilder.build())
+                    } else {
+                        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
+                            setTextViewText(android.R.id.text1, "Unlock PeerVault to autofill")
+                        }
+                        responseBuilder.setAuthentication(allIds, pendingIntent.intentSender, presentation)
+                    }
                 }
 
-                // Without this, Android has no idea this response corresponds
-                // to a saveable login form, and onSaveRequest below is simply
-                // never invoked — regardless of whether the user actually
-                // typed a new/changed password. This was previously missing
-                // entirely, on both the unlocked AND locked branches.
+                // SaveInfo — required for Android to call onSaveRequest after form submit
                 buildSaveInfo(fields)?.let { responseBuilder.setSaveInfo(it) }
 
                 callback.onSuccess(responseBuilder.build())
@@ -136,10 +174,6 @@ class PeerVaultAutofillService : AutofillService() {
         serviceScope.launch {
             try {
                 if (!AutofillBridge.isUnlocked(applicationContext)) {
-                    // Vault is locked — we cannot safely encrypt without the
-                    // VEK. Real UX: prompt via a small unlock activity before
-                    // saving; omitted here for brevity but follows the exact
-                    // same pattern as PeerVaultAutofillAuthActivity above.
                     callback.onFailure("Unlock PeerVault to save this password")
                     return@launch
                 }
@@ -151,18 +185,63 @@ class PeerVaultAutofillService : AutofillService() {
         }
     }
 
-    /** Declares which fields, if changed/filled by the user, should trigger
-     * Android's "Save to PeerVault?" bar via onSaveRequest above. Requires
-     * at least a password field to be worth saving. */
-    private fun buildSaveInfo(fields: FieldFinder.Fields): SaveInfo? {
-        val passwordId = fields.passwordId ?: return null
-        val saveDataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD or
-            (if (fields.usernameId != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0)
-        val requiredIds = listOfNotNull(fields.usernameId, passwordId).toTypedArray()
-        return SaveInfo.Builder(saveDataTypes, requiredIds).build()
+    // ─────────────────────────────────────────────────────────
+    //  Inline Suggestions (API 30+) — keyboard-strip chips
+    // ─────────────────────────────────────────────────────────
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun buildInlineDataset(
+        fields: FieldFinder.Fields,
+        websiteName: String,
+        username: String,
+        password: String,
+        spec: InlinePresentationSpec,
+        index: Int,
+    ): Dataset {
+        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
+            setTextViewText(android.R.id.text1, websiteName)
+            setTextViewText(android.R.id.text2, username)
+        }
+        val inlinePresentation = buildInlinePresentation(spec, websiteName, username, 2000 + index)
+        val builder = Dataset.Builder()
+        fields.usernameId?.let { builder.setValue(it, AutofillValue.forText(username), presentation, inlinePresentation) }
+        fields.passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation, inlinePresentation) }
+        return builder.build()
     }
 
-    private fun buildDataset(fields: FieldFinder.Fields, websiteName: String, username: String, password: String): Dataset {
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun buildInlinePresentation(
+        spec: InlinePresentationSpec,
+        title: String,
+        subtitle: String,
+        requestCode: Int,
+    ): InlinePresentation {
+        // The Inline Suggestions API requires a PendingIntent even if we don't
+        // need it — the OS uses it as a click target for the chip. We point it
+        // at a no-op activity (main app) since the autofill value is already
+        // embedded in the Dataset.
+        val pendingIntent = PendingIntent.getActivity(
+            applicationContext,
+            requestCode,
+            Intent(applicationContext, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val slice = InlineSuggestionUi.newContentBuilder(pendingIntent)
+            .setTitle(title)
+            .setSubtitle(subtitle)
+            .setStartIcon(Icon.createWithResource(this, android.R.drawable.ic_lock_lock))
+            .build()
+            .slice
+
+        return InlinePresentation(slice, spec, /* pinned= */ false)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    //  Legacy dropdown (API 26–29 / non-inline-capable IMEs)
+    // ─────────────────────────────────────────────────────────
+
+    private fun buildDropdownDataset(fields: FieldFinder.Fields, websiteName: String, username: String, password: String): Dataset {
         val builder = Dataset.Builder()
         val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
             setTextViewText(android.R.id.text1, websiteName)
@@ -172,6 +251,14 @@ class PeerVaultAutofillService : AutofillService() {
         fields.passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation) }
         return builder.build()
     }
+
+    private fun buildSaveInfo(fields: FieldFinder.Fields): SaveInfo? {
+        val passwordId = fields.passwordId ?: return null
+        val saveDataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD or
+            (if (fields.usernameId != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0)
+        val requiredIds = listOfNotNull(fields.usernameId, passwordId).toTypedArray()
+        return SaveInfo.Builder(saveDataTypes, requiredIds).build()
+    }
 }
 
 /**
@@ -179,16 +266,10 @@ class PeerVaultAutofillService : AutofillService() {
  * password AutofillIds using Android's standard autofill hints first, then
  * falling back to InputType/HTML heuristics for apps that don't set hints.
  *
- * Also extracts the page's web domain when the structure came from a
- * browser tab (Chrome, Brave, and other Chromium-based browsers populate
- * `ViewNode.webDomain` on the relevant nodes of the rendered page). This
- * matters a great deal: a single browser process hosts every website the
- * user visits under ONE Android package name (e.g. "com.brave.browser"),
- * so using `activityComponent.packageName` as the identifier — which the
- * previous version of this file did — means every single site inside that
- * browser collapses into the same identifier and can never match a
- * specific saved entry by domain. Using `webDomain` when present fixes
- * this for Brave, Chrome, Edge, Firefox (in WebView-compat mode), etc.
+ * Extracts the page's web domain when present (Chrome, Brave, Edge, etc.
+ * populate `ViewNode.webDomain` on rendered page nodes). Using `webDomain`
+ * instead of `packageName` prevents every website inside a single browser
+ * from collapsing into one identifier.
  */
 object FieldFinder {
     data class Fields(val usernameId: AutofillId?, val passwordId: AutofillId?, val appIdentifier: String)
@@ -214,14 +295,13 @@ object FieldFinder {
                     passwordId = passwordId ?: node.autofillId
                 }
             } else {
-                // Heuristic fallback: text field with password InputType, or
-                // id/hint text containing "user"/"email"/"pass".
                 val isPasswordInputType = (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
-                    (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0
+                    (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0 ||
+                    (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0
                 val idOrHint = ((node.idEntry ?: "") + " " + (node.hint ?: "")).lowercase()
                 if (isPasswordInputType && passwordId == null) {
                     passwordId = node.autofillId
-                } else if ((idOrHint.contains("user") || idOrHint.contains("email") || idOrHint.contains("login")) && usernameId == null) {
+                } else if ((idOrHint.contains("user") || idOrHint.contains("email") || idOrHint.contains("login") || idOrHint.contains("identifier")) && usernameId == null) {
                     usernameId = node.autofillId
                 }
             }

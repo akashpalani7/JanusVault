@@ -57,6 +57,15 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.4.0
 
+  # BLE GATT server (phone acts as peripheral for PC/browser sync)
+  ble_peripheral: ^2.4.0
+
+  # Nearby Connections (Android ↔ Android BLE + WiFi Direct)
+  nearby_connections: ^4.0.2
+
+  # Runtime permission requests (BLE, location, nearby)
+  permission_handler: ^11.3.0
+
   cupertino_icons: ^1.0.8
   cryptography_flutter: ^2.3.4
 

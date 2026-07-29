@@ -26,153 +26,248 @@ async function buildSelfDeviceInfo(): Promise<DeviceInfo | null> {
  * `deviceInfo` message (sent only once it has verified us) before sending
  * anything real, rather than assuming any particular message ordering.
  */
-export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number }> {
-  const syncAuthKey = await deriveSyncAuthKey(vek);
+export interface SyncTransport {
+  send(message: string): void | Promise<void>;
+  close(): void;
+  onMessage: ((message: string) => void) | null;
+  onError: ((err: Error) => void) | null;
+}
 
+export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://${host}:${port}`);
-    let pulled = 0;
-    let pushed = 0;
-    let sentRealData = false;
-    let handshakeConfirmed = false; // true once the phone proves it accepted our handshake response
-    let sentNonceBase64 = "";
-
-    const sendRealDataOnceAuthenticated = async () => {
-      if (sentRealData) return;
-      sentRealData = true;
-      handshakeConfirmed = true;
-
-      const selfInfo = await buildSelfDeviceInfo();
-      if (selfInfo) {
-        socket.send(JSON.stringify({ type: "deviceInfo", payload: { devices: [selfInfo] } } satisfies SyncMessage));
-      }
-
-      const mine = await ExtensionStorage.getAllEntries();
-      const metadata: RecordMeta[] = mine.map((e) => ({
-        uuid: e.uuid,
-        hash: e.hash,
-        lastUpdated: e.lastUpdated,
-        deleted: e.deleted,
-      }));
-      socket.send(JSON.stringify({ type: "metadata", payload: { entries: metadata } } satisfies SyncMessage));
+    const transport: SyncTransport = {
+      send: (msg) => socket.send(msg),
+      close: () => socket.close(),
+      onMessage: null,
+      onError: null,
     };
 
-    socket.onmessage = async (event) => {
-      const message = JSON.parse(event.data) as SyncMessage;
-      console.log(`Sync socket: Received message type '${message.type}'`);
-      try {
-        switch (message.type) {
-          case "hello": {
-            console.log(`Sync socket: Answering phone's hello challenge...`);
-            const mac = await hmacSha256(syncAuthKey, message.payload.nonce as string);
-            socket.send(JSON.stringify({ type: "helloResponse", payload: { mac } } satisfies SyncMessage));
-            break;
-          }
-          case "helloResponse": {
-            const actualMac = message.payload.mac as string;
-            const expectedMac = await hmacSha256(syncAuthKey, sentNonceBase64);
-            console.log(`Sync socket: Phone answered our hello challenge. Valid: ${actualMac === expectedMac}`);
-            if (actualMac !== expectedMac) {
-                console.error("Sync socket: Handshake MAC mismatch! The extension is paired to a DIFFERENT vault than the phone, or the phone was reinstalled.");
-                reject(new Error("Handshake failed! Your phone's vault does not match this extension. Please re-pair your browser."));
-                socket.close();
-            }
-            break;
-          }
-          case "records": {
-            const entries = message.payload.entries as EncryptedEntryRecord[];
-            await ExtensionStorage.upsertEntries(entries);
-            pulled += entries.length;
-            break;
-          }
-          case "request": {
-            const uuids = message.payload.uuids as string[];
-            const mine = await ExtensionStorage.getAllEntries();
-            const requested = mine.filter((e) => uuids.includes(e.uuid));
-            const reply: SyncMessage = { type: "records", payload: { entries: requested } };
-            socket.send(JSON.stringify(reply));
-            pushed += requested.length;
-            break;
-          }
-          case "deviceInfo": {
-            // First deviceInfo from the phone proves it accepted our
-            // handshake response — safe to send our own real data now.
-            await sendRealDataOnceAuthenticated();
-            const devices = message.payload.devices as DeviceInfo[];
-            if (devices) {
-              const existing = await ExtensionStorage.getDeviceList();
-              const byId = new Map(existing.map((d) => [d.deviceId, d]));
-              for (const phoneDevice of devices) {
-                const current = byId.get(phoneDevice.deviceId);
-                if (!current) {
-                  byId.set(phoneDevice.deviceId, phoneDevice);
-                } else {
-                  // Both sides have it — take the newer lastSyncedAt, OR revoked if either says so
-                  if (new Date(phoneDevice.lastSyncedAt) > new Date(current.lastSyncedAt)) {
-                    current.lastSyncedAt = phoneDevice.lastSyncedAt;
-                  }
-                  if (phoneDevice.revoked) {
-                    current.revoked = true;
-                  }
-                }
-              }
-              await ExtensionStorage.saveDeviceList(Array.from(byId.values()));
-            }
-            await ExtensionStorage.saveLastSyncedAt(new Date().toISOString());
-            break;
-          }
-          case "done": {
-            socket.close();
-            resolve({ pulled, pushed });
-            return;
-          }
-          case "error": {
-            reject(new Error((message.payload.message as string) ?? "Unknown sync error"));
-            socket.close();
-            break;
-          }
-          default:
-            break;
-        }
-      } catch (e) {
-        reject(e);
-      }
-    };
-
+    socket.onmessage = (event) => transport.onMessage?.(event.data);
     socket.onerror = () => {
       console.error(`Sync socket error: Could not connect to ${host}:${port}`);
-      reject(new Error(`Could not connect to ${host}:${port}`));
+      const err = new Error(`Could not connect to ${host}:${port}`);
+      if (transport.onError) transport.onError(err);
+      else reject(err);
+    };
+    socket.addEventListener("open", () => runSyncProtocol(transport, vek, resolve, reject));
+  });
+}
+
+export async function syncWithBlePhone(vek: CryptoKey): Promise<{ pulled: number; pushed: number }> {
+  const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
+  const EOM_MARKER = '\x04';
+
+  const device = await (navigator as any).bluetooth.requestDevice({
+    filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+  });
+
+  let server: any;
+  let char: any;
+  for (let i = 0; i < 4; i++) {
+    try {
+      server = await device.gatt.connect();
+      await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
+      const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
+      char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
+      break; // Connected and services found
+    } catch (e) {
+      if (i === 3) throw e; // Max retries
+      console.warn(`GATT dropped during sync, retrying in 1s... (${i+1}/4)`);
+      if (server?.connected) try { server.disconnect(); } catch{}
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  await char.startNotifications();
+
+  return new Promise((resolve, reject) => {
+    let inboundBuffer = "";
+    
+    const transport: SyncTransport = {
+      send: async (msg) => {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(msg + EOM_MARKER);
+        const chunkSize = 500;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          await char.writeValueWithoutResponse(bytes.slice(i, i + chunkSize));
+        }
+      },
+      close: () => {
+        if (server.connected) {
+          server.disconnect();
+        }
+      },
+      onMessage: null,
+      onError: null,
     };
 
-    // The phone sends an explicit `done` once a round is finished (see
-    // lan_sync_service.dart) — handled above. The quiet timer below is a
-    // fallback for edge cases (e.g. the phone crashes mid-sync without
-    // sending `done`).
-    let quietTimer: ReturnType<typeof setTimeout>;
-    const resetQuietTimer = () => {
-      clearTimeout(quietTimer);
-      quietTimer = setTimeout(() => {
-        socket.close();
-        if (!handshakeConfirmed) {
-          console.error("Sync socket: The 8-second quiet timer fired and the handshake NEVER finished. Check if your phone's VEK matches this extension's VEK.");
-          reject(new Error(
-            "Connected, but your phone never completed the handshake. Check that PeerVault is open, " +
-            "the vault is unlocked there, and \"Make this device visible for sync\" is on.",
-          ));
-        } else {
-          resolve({ pulled, pushed });
-        }
-      }, 8000);
-    };
-    socket.addEventListener("message", resetQuietTimer);
-    socket.addEventListener("open", () => {
-      console.log(`Sync socket: Opened connection to ${host}:${port}. Sending hello challenge...`);
-      resetQuietTimer();
-      const nonce = crypto.getRandomValues(new Uint8Array(16));
-      sentNonceBase64 = btoa(String.fromCharCode(...nonce));
-      socket.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage));
+    char.addEventListener('characteristicvaluechanged', (event: any) => {
+      const val = new Uint8Array(event.target.value.buffer);
+      const text = new TextDecoder().decode(val);
+      const eomIdx = text.indexOf(EOM_MARKER);
+      if (eomIdx !== -1) {
+        inboundBuffer += text.substring(0, eomIdx);
+        transport.onMessage?.(inboundBuffer);
+        inboundBuffer = text.substring(eomIdx + 1);
+      } else {
+        inboundBuffer += text;
+      }
     });
+
+    device.addEventListener('gattserverdisconnected', () => {
+      const err = new Error("BLE connection unexpectedly disconnected");
+      if (transport.onError) transport.onError(err);
+      else reject(err);
+    });
+
+    runSyncProtocol(transport, vek, resolve, reject);
   });
+}
+
+async function runSyncProtocol(
+  transport: SyncTransport,
+  vek: CryptoKey,
+  resolve: (res: { pulled: number; pushed: number }) => void,
+  reject: (reason?: any) => void
+) {
+  const syncAuthKey = await deriveSyncAuthKey(vek);
+  let pulled = 0;
+  let pushed = 0;
+  let sentRealData = false;
+  let handshakeConfirmed = false;
+  let sentNonceBase64 = "";
+
+  const sendRealDataOnceAuthenticated = async () => {
+    if (sentRealData) return;
+    sentRealData = true;
+    handshakeConfirmed = true;
+
+    const selfInfo = await buildSelfDeviceInfo();
+    if (selfInfo) {
+      transport.send(JSON.stringify({ type: "deviceInfo", payload: { devices: [selfInfo] } } satisfies SyncMessage));
+    }
+
+    const mine = await ExtensionStorage.getAllEntries();
+    const metadata: RecordMeta[] = mine.map((e) => ({
+      uuid: e.uuid,
+      hash: e.hash,
+      lastUpdated: e.lastUpdated,
+      deleted: e.deleted,
+    }));
+    transport.send(JSON.stringify({ type: "metadata", payload: { entries: metadata } } satisfies SyncMessage));
+  };
+
+  transport.onMessage = async (rawJson: string) => {
+    const message = JSON.parse(rawJson) as SyncMessage;
+    console.log(`Sync transport: Received message type '${message.type}'`);
+    try {
+      switch (message.type) {
+        case "hello": {
+          console.log(`Sync transport: Answering phone's hello challenge...`);
+          const mac = await hmacSha256(syncAuthKey, message.payload.nonce as string);
+          transport.send(JSON.stringify({ type: "helloResponse", payload: { mac } } satisfies SyncMessage));
+          break;
+        }
+        case "helloResponse": {
+          const actualMac = message.payload.mac as string;
+          const expectedMac = await hmacSha256(syncAuthKey, sentNonceBase64);
+          console.log(`Sync transport: Phone answered our hello challenge. Valid: ${actualMac === expectedMac}`);
+          if (actualMac !== expectedMac) {
+              console.error("Sync transport: Handshake MAC mismatch!");
+              transport.close();
+              reject(new Error("Handshake failed! Your phone's vault does not match this extension. Please re-pair your browser."));
+          }
+          break;
+        }
+        case "records": {
+          const entries = message.payload.entries as EncryptedEntryRecord[];
+          await ExtensionStorage.upsertEntries(entries);
+          pulled += entries.length;
+          break;
+        }
+        case "request": {
+          const uuids = message.payload.uuids as string[];
+          const mine = await ExtensionStorage.getAllEntries();
+          const requested = mine.filter((e) => uuids.includes(e.uuid));
+          transport.send(JSON.stringify({ type: "records", payload: { entries: requested } } satisfies SyncMessage));
+          pushed += requested.length;
+          break;
+        }
+        case "deviceInfo": {
+          await sendRealDataOnceAuthenticated();
+          const devices = message.payload.devices as DeviceInfo[];
+          if (devices) {
+            const existing = await ExtensionStorage.getDeviceList();
+            const byId = new Map(existing.map((d) => [d.deviceId, d]));
+            for (const phoneDevice of devices) {
+              const current = byId.get(phoneDevice.deviceId);
+              if (!current) {
+                byId.set(phoneDevice.deviceId, phoneDevice);
+              } else {
+                if (new Date(phoneDevice.lastSyncedAt) > new Date(current.lastSyncedAt)) {
+                  current.lastSyncedAt = phoneDevice.lastSyncedAt;
+                }
+                if (phoneDevice.revoked) {
+                  current.revoked = true;
+                }
+              }
+            }
+            await ExtensionStorage.saveDeviceList(Array.from(byId.values()));
+          }
+          await ExtensionStorage.saveLastSyncedAt(new Date().toISOString());
+          break;
+        }
+        case "done": {
+          transport.close();
+          resolve({ pulled, pushed });
+          return;
+        }
+        case "error": {
+          transport.close();
+          reject(new Error((message.payload.message as string) ?? "Unknown sync error"));
+          break;
+        }
+      }
+    } catch (e) {
+      transport.close();
+      reject(e);
+    }
+  };
+
+  transport.onError = (err) => {
+    transport.close();
+    reject(err);
+  };
+
+  let quietTimer: ReturnType<typeof setTimeout>;
+  const resetQuietTimer = () => {
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(() => {
+      transport.close();
+      if (!handshakeConfirmed) {
+        reject(new Error(
+          "Connected, but your phone never completed the handshake. Check that PeerVault is open, " +
+          "the vault is unlocked there, and \"Make this device visible for sync\" is on."
+        ));
+      } else {
+        resolve({ pulled, pushed });
+      }
+    }, 8000);
+  };
+  
+  // Wrap incoming onMessage to also reset timer
+  const originalOnMessage = transport.onMessage;
+  transport.onMessage = (msg) => {
+    resetQuietTimer();
+    return originalOnMessage?.(msg);
+  };
+
+  console.log(`Sync transport: Opened connection. Sending hello challenge...`);
+  resetQuietTimer();
+  const nonce = crypto.getRandomValues(new Uint8Array(16));
+  sentNonceBase64 = btoa(String.fromCharCode(...nonce));
+  transport.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage));
 }
 
 /** Recomputes a record's sync hash after a local edit/capture, using the

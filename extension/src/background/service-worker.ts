@@ -442,6 +442,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: (e as Error).message });
         }
         break;
+
       }
       case "CREATE_PAIRING_PACKAGE": {
         const vek = await getVek();
