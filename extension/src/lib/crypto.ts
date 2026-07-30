@@ -113,7 +113,7 @@ export async function deriveSyncAuthKey(vek: CryptoKey): Promise<CryptoKey> {
     { name: "HKDF", hash: "SHA-256", salt: SYNC_AUTH_SALT, info: SYNC_AUTH_INFO },
     keyMaterial,
     { name: "HMAC", hash: "SHA-256", length: 256 },
-    false,
+    true,
     ["sign", "verify"],
   );
 }

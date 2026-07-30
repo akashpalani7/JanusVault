@@ -13,7 +13,7 @@ import {
 import { EncryptedEntryRecord } from "../lib/models.js";
 import { ExtensionStorage } from "../lib/storage.js";
 import { recomputeHash, syncWithPhone } from "../lib/sync-client.js";
-import { requestPhoneApproval } from "../lib/auth-client.js";
+import { requestPhoneApproval, PhoneAuthOutcome } from "../lib/auth-client.js";
 
 /**
  * A form submit almost always triggers navigation before the user can
@@ -116,13 +116,106 @@ type ApprovalOutcome = "approved" | "denied" | "unreachable" | "timeout" | "no_p
  * "remember for this session" — a fresh request to the phone every time,
  * because that's what was explicitly asked for.
  */
+async function setupOffscreenDocument(): Promise<void> {
+  const existingContexts = await (chrome.runtime as any).getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [chrome.runtime.getURL('offscreen/offscreen-ble.html')]
+  });
+
+  if (existingContexts && existingContexts.length > 0) {
+    return;
+  }
+
+  try {
+    await (chrome as any).offscreen.createDocument({
+      url: 'offscreen/offscreen-ble.html',
+      reasons: ['DOM_PARSER'],
+      justification: 'Required for background Bluetooth GATT communication'
+    });
+  } catch (e) {
+    // Gracefully ignore offscreen creation issues
+  }
+}
+
+async function requestPhoneApprovalBle(actionLabel: string, syncAuthKey: CryptoKey): Promise<PhoneAuthOutcome> {
+  try {
+    await setupOffscreenDocument();
+    
+    // Export symmetric hmac key into a transferrable format
+    const syncAuthKeyRaw = await crypto.subtle.exportKey("raw", syncAuthKey);
+    const requestId = crypto.randomUUID();
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'BLE_EXECUTE_AUTH',
+      actionLabel,
+      requestId,
+      syncAuthKeyRaw: Array.from(new Uint8Array(syncAuthKeyRaw))
+    });
+
+    if (response && response.outcome) {
+      return response.outcome as PhoneAuthOutcome;
+    }
+    return "unreachable";
+  } catch (e) {
+    return "unreachable";
+  }
+}
+
 async function requireApprovalOrDeny(actionLabel: string, vek: CryptoKey): Promise<ApprovalOutcome> {
-  const lastHost = await ExtensionStorage.getLastHost();
-  if (!lastHost) return "no_phone_configured";
-  const [host, portStr] = lastHost.split(":");
-  const port = Number(portStr) || 51827;
   const syncAuthKey = await deriveSyncAuthKey(vek);
-  return requestPhoneApproval(host, port, actionLabel, syncAuthKey);
+  const authMethod = await ExtensionStorage.getAuthMethod();
+
+  if (authMethod === "bluetooth") {
+    const outcome = await requestPhoneApprovalBle(actionLabel, syncAuthKey);
+    if (outcome === "unreachable") {
+       return new Promise<ApprovalOutcome>((resolve) => {
+         const rid = crypto.randomUUID();
+         const listener = async (msg: any) => {
+           if (msg.type === "BLE_AUTH_POPUP_RESULT" && msg.requestId === rid) {
+             chrome.runtime.onMessage.removeListener(listener);
+             
+             if (msg.retry) {
+                const retryOutcome = await requestPhoneApprovalBle(actionLabel, syncAuthKey);
+                resolve(retryOutcome);
+             } else {
+                resolve(msg.outcome ?? "unreachable");
+             }
+           }
+         };
+         chrome.runtime.onMessage.addListener(listener);
+         
+         crypto.subtle.exportKey("raw", syncAuthKey).then((exported) => {
+           const b64Key = btoa(String.fromCharCode(...new Uint8Array(exported)));
+           const targetUrl = chrome.runtime.getURL(`popup/popup.html?popout=auth&rid=${rid}&actionLabel=${encodeURIComponent(actionLabel)}&authKey=${encodeURIComponent(b64Key)}`);
+           
+           chrome.windows.create({
+             url: targetUrl,
+             type: "normal",
+             width: 450,
+             height: 650,
+             focused: true
+           }).catch((e) => {
+             console.error("Failed to pop out auth window, falling back to tab", e);
+             chrome.tabs.create({ url: targetUrl, active: true }).catch((err2) => {
+                 chrome.runtime.onMessage.removeListener(listener);
+                 resolve("unreachable");
+             });
+           });
+         }).catch((e) => {
+             chrome.runtime.onMessage.removeListener(listener);
+             resolve("unreachable");
+         });
+       });
+    }
+    return outcome;
+  } else {
+    const lastHost = await ExtensionStorage.getLastHost();
+    if (!lastHost) return "no_phone_configured";
+    
+    const [host, portStr] = lastHost.split(":");
+    const port = Number(portStr) || 51827;
+    return requestPhoneApproval(host, port, actionLabel, syncAuthKey);
+  }
 }
 
 /** Metadata only — used for both the popup's browsable list and the
@@ -326,6 +419,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "peervault-periodic-sync") attemptBackgroundSync();
 });
 
+
 /**
  * Completes pairing entirely offline, using nothing but the string scanned
  * or typed from the phone's pairing QR code — no network call needed,
@@ -361,7 +455,7 @@ async function completePairing(rawPairingPackage: string, deviceName?: string) {
   return { paired: true };
 }
 
-async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: number[], deviceName?: string) {
+async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: number[], deviceName?: string, peerDevice?: any) {
   const sharedSecret = new Uint8Array(sharedSecretArray);
   const wrappingKey = await deriveEcdhWrappingKey(sharedSecret);
   const vek = await unwrapVek(wrappedVekBase64, wrappingKey);
@@ -378,6 +472,7 @@ async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: n
   await ExtensionStorage.savePairedAt(now);
   await ExtensionStorage.saveLastSyncedAt(now);
   if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
+  if (peerDevice) await ExtensionStorage.saveDeviceList([peerDevice]);
   cachedVek = vek;
 
   return { paired: true };
@@ -463,7 +558,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       case "COMPLETE_LAN_PAIRING":
         try {
-          sendResponse(await completeLanPairing(message.wrappedVek as string, message.sharedSecretArray as number[], message.deviceName as string | undefined));
+          sendResponse(await completeLanPairing(message.wrappedVek as string, message.sharedSecretArray as number[], message.deviceName as string | undefined, message.peerDevice));
         } catch (e) {
           sendResponse({ paired: false, error: (e as Error).message });
         }

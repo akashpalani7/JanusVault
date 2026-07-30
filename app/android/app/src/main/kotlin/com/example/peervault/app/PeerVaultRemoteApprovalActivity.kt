@@ -27,12 +27,14 @@ class PeerVaultRemoteApprovalActivity : FragmentActivity() {
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 AutofillBridge.resolveApproval(true)
+                com.example.peervault.MainActivity.resolveApproval(true)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 AutofillBridge.resolveApproval(false)
+                com.example.peervault.MainActivity.resolveApproval(false)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }

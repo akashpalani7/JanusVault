@@ -8,109 +8,122 @@ let bleDevice: BluetoothDevice | null = null;
 let syncCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
 let incomingBuffer = '';
 
-// Listen for messages from the extension service worker / popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'START_BLE_CONNECTION') {
-    startBleConnection()
-      .then(() => sendResponse({ success: true }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true; // async response
-  }
-  
-  if (message.type === 'BLE_SEND_MESSAGE') {
-    sendJsonMessage(message.payload)
-      .then(() => sendResponse({ success: true }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
+async function hmacSha256(key: CryptoKey, nonceBase64: string): Promise<string> {
+  const nonceBytes = Uint8Array.from(atob(nonceBase64), (c) => c.charCodeAt(0));
+  const signature = await crypto.subtle.sign("HMAC", key, nonceBytes);
+  return btoa(String.fromCharCode(...new Uint8Array(signature)));
+}
 
-  if (message.type === 'DISCONNECT_BLE') {
-    if (bleDevice && bleDevice.gatt?.connected) {
-      bleDevice.gatt.disconnect();
-    }
-    sendResponse({ success: true });
-    return false;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'BLE_EXECUTE_AUTH') {
+    executeBleAuth(message.actionLabel, message.requestId, Uint8Array.from(message.syncAuthKeyRaw))
+      .then((approved) => sendResponse({ outcome: approved ? "approved" : "denied" }))
+      .catch((err) => sendResponse({ outcome: "unreachable", error: err.message }));
+    return true; // Keep message channel open
   }
 });
 
-async function startBleConnection(): Promise<void> {
-  if (!navigator.bluetooth) {
-    throw new Error('Web Bluetooth API is not supported in this browser.');
-  }
-
-  // Pop up the system BLE picker to user
-  bleDevice = await navigator.bluetooth.requestDevice({
-    filters: [{ services: [PEERVAULT_SERVICE_UUID] }],
-  });
-
-  if (!bleDevice.gatt) {
-    throw new Error('Device does not support GATT.');
-  }
-
-  bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
-  const server = await bleDevice.gatt.connect();
-  const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
-  syncCharacteristic = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
-
-  // Subscribe to incoming messages (notifications)
-  await syncCharacteristic.startNotifications();
-  syncCharacteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
-
-  // Notify background script we are connected
-  chrome.runtime.sendMessage({ type: 'BLE_STATUS_UPDATE', status: 'connected' });
-}
-
-function onDisconnected() {
-  chrome.runtime.sendMessage({ type: 'BLE_STATUS_UPDATE', status: 'disconnected' });
-  bleDevice = null;
-  syncCharacteristic = null;
-}
-
-function handleCharacteristicValueChanged(event: Event) {
-  const target = event.target as BluetoothRemoteGATTCharacteristic;
-  const value = target.value;
-  if (!value) return;
-
-  const decoder = new TextDecoder('utf-8');
-  const chunk = decoder.decode(value);
-  
-  if (chunk.endsWith(EOM_MARKER)) {
-    incomingBuffer += chunk.substring(0, chunk.length - EOM_MARKER.length);
-    const completeMessage = incomingBuffer;
-    incomingBuffer = '';
-    
-    // Forward parsed message to service worker
-    try {
-      chrome.runtime.sendMessage({ 
-        type: 'BLE_MESSAGE_RECEIVED', 
-        payload: completeMessage 
-      });
-    } catch (e) {
-      console.error('Failed to parse incoming BLE JSON:', e);
-    }
-  } else {
-    incomingBuffer += chunk;
-  }
-}
-
 async function sendJsonMessage(jsonString: string): Promise<void> {
   if (!syncCharacteristic) throw new Error('Not connected to BLE device.');
-  
   const payload = jsonString + EOM_MARKER;
   const encoder = new TextEncoder();
   const bytes = encoder.encode(payload);
-  
-  // Write chunks sequentially
   for (let offset = 0; offset < bytes.length; offset += MAX_CHUNK_SIZE) {
     const end = Math.min(offset + MAX_CHUNK_SIZE, bytes.length);
     const chunk = bytes.slice(offset, end);
-    // writeValueWithoutResponse is significantly faster and typically handles larger MTUs
-    // automatically in modern Chrome, but some fallback might be needed if it fails.
     if ('writeValueWithoutResponse' in syncCharacteristic) {
        await syncCharacteristic.writeValueWithoutResponse(chunk);
     } else {
        await syncCharacteristic.writeValue(chunk);
     }
   }
+}
+
+async function executeBleAuth(actionLabel: string, requestId: string, authKeyRaw: Uint8Array): Promise<boolean> {
+  if (!navigator.bluetooth) throw new Error('Web Bluetooth API is not supported in this browser.');
+  
+  // Stealth pairing via cached authorizations
+  const devices = await navigator.bluetooth.getDevices();
+  const paired = devices.find(d => !!d.id);
+  if (!paired) throw new Error("No previously authorized WebBluetooth PeerVault device found.");
+  
+  bleDevice = paired;
+  
+  const finishEarly = () => {
+    try { bleDevice?.gatt?.disconnect(); } catch (e) {}
+    syncCharacteristic = null;
+  };
+
+  // Removed watchAdvertisements logic because Windows Chrome regularly swallows
+  // advertisement events, causing a 5-second timeout even when the device is nearby
+  // and fully connectable via GATT.
+
+  let server: any;
+  for (let i = 0; i < 4; i++) {
+     try {
+       server = await bleDevice.gatt.connect();
+       break;
+     } catch(e) {
+       if (i === 3) throw e;
+       await new Promise(r => setTimeout(r, 1000));
+     }
+  }
+
+  const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
+  syncCharacteristic = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
+  
+  const authKey = await crypto.subtle.importKey("raw", authKeyRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+
+  return new Promise(async (resolve, reject) => {
+    let authRequestSent = false;
+
+    // Timeout fallback matching lan sync
+    const timer = setTimeout(() => {
+      finishEarly();
+      reject(new Error("Timeout waiting for phone BLE auth approval."));
+    }, 60000);
+
+    const finish = (approved: boolean) => {
+      clearTimeout(timer);
+      finishEarly();
+      resolve(approved);
+    };
+
+    syncCharacteristic!.addEventListener('characteristicvaluechanged', async (event: any) => {
+      const dataView = event.target.value;
+      const text = new TextDecoder().decode(dataView);
+      incomingBuffer += text;
+
+      while (incomingBuffer.includes(EOM_MARKER)) {
+        const eomIdx = incomingBuffer.indexOf(EOM_MARKER);
+        const fullMessage = incomingBuffer.substring(0, eomIdx);
+        incomingBuffer = incomingBuffer.substring(eomIdx + 1);
+
+        try {
+          const msg = JSON.parse(fullMessage);
+          if (msg.type === "hello") {
+            const mac = await hmacSha256(authKey, msg.payload.nonce);
+            await sendJsonMessage(JSON.stringify({ type: "helloResponse", payload: { mac } }));
+          } else if (msg.type === "deviceInfo" && !authRequestSent) {
+            authRequestSent = true;
+            await sendJsonMessage(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel } }));
+          } else if (msg.type === "authResponse" && msg.payload.requestId === requestId) {
+            finish(!!msg.payload.approved);
+          }
+        } catch (e) {
+          console.error("BLE auth JSON parsing error", e);
+        }
+      }
+    });
+
+    try {
+      await syncCharacteristic!.startNotifications();
+      const nonce = crypto.getRandomValues(new Uint8Array(16));
+      const sentNonceBase64 = btoa(String.fromCharCode(...nonce));
+      await sendJsonMessage(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } }));
+    } catch (e) {
+      clearTimeout(timer);
+      reject(e);
+    }
+  });
 }

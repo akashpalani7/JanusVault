@@ -21,8 +21,10 @@
         <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
           <h3 style="margin-top:0;">Option 1: Pair over Wi-Fi</h3>
           <p class="hint">Enter your phone's Local IP address (shown on its Sync screen) to connect instantly over Wi-Fi.</p>
-          <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" />
-          <button id="lanPairButton">Pair over Wi-Fi</button>
+          <div style="display: flex; gap: 8px;">
+            <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" style="flex:1; margin-bottom: 0;" />
+            <button id="lanPairButton" style="width: auto; margin-top: 0; flex-shrink: 0;">Pair over Wi-Fi</button>
+          </div>
         </div>
 
         <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
@@ -45,11 +47,20 @@
         <h2>Phone connection</h2>
         <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's LAN address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
         <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" style="flex:1;" />
-          <button id="syncButton">Sync via Wi-Fi</button>
+          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" style="flex:1; margin-bottom: 0;" />
+          <button id="syncButton" style="width: auto; margin-top: 0; flex-shrink: 0;">Sync via Wi-Fi</button>
         </div>
         <button id="syncBleButton" class="secondary" style="width:100%;">Sync via Bluetooth</button>
         <p id="syncStatus" class="hint"></p>
+
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #ddd;">
+          <h3 style="margin-top:0; font-size: 13px;">Autofill Authentication</h3>
+          <p class="hint" style="margin-bottom: 8px;">Choose how website autofill requests securely connect to your phone to ask for approval.</p>
+          <select id="authMethodSelect" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-family: monospace;">
+            <option value="wifi">Use Wi-Fi (LAN)</option>
+            <option value="bluetooth">Use Bluetooth</option>
+          </select>
+        </div>
       </section>
 
       <nav id="mainNav" class="hidden">

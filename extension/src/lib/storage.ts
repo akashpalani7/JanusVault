@@ -8,6 +8,7 @@ const DEVICE_PAIRED_AT_KEY = "peervault.device_paired_at";
 const DEVICE_LAST_SYNCED_AT_KEY = "peervault.device_last_synced_at";
 const DEVICE_DISPLAY_NAME_KEY = "peervault.device_display_name";
 const LAST_HOST_KEY = "peervault.last_sync_host"; // "host:port" — where to reach the phone for both sync AND every auth approval
+const AUTH_METHOD_KEY = "peervault.auth_method"; // "wifi" or "bluetooth"
 const DEVICE_LIST_KEY = "peervault.known_devices"; // non-secret metadata received via sync's deviceInfo messages
 
 /**
@@ -132,6 +133,15 @@ export class ExtensionStorage {
 
   static async saveDeviceList(devices: DeviceInfo[]): Promise<void> {
     await chrome.storage.local.set({ [DEVICE_LIST_KEY]: devices });
+  }
+
+  static async getAuthMethod(): Promise<"wifi" | "bluetooth"> {
+    const result = await chrome.storage.local.get(AUTH_METHOD_KEY);
+    return (result[AUTH_METHOD_KEY] as "wifi" | "bluetooth") || "wifi"; // Default to wifi
+  }
+
+  static async saveAuthMethod(method: "wifi" | "bluetooth"): Promise<void> {
+    await chrome.storage.local.set({ [AUTH_METHOD_KEY]: method });
   }
 
   static async wipeAll(): Promise<void> {

@@ -32,9 +32,20 @@ export function requestLanPairing(
       try {
         myKeyPair = await generateEcdhKeyPair();
         const jwk = await exportJwEcdhKey(myKeyPair.publicKey);
+        let devId = await ExtensionStorage.getDeviceId();
+        if (!devId) {
+          devId = `ext_${Date.now()}`;
+          await ExtensionStorage.saveDeviceId(devId);
+        }
         socket.send(JSON.stringify({ 
           type: "pairingRequest", 
-          payload: { deviceName, pubKey: jwk } 
+          payload: { 
+            deviceName, 
+            pubKey: jwk,
+            clientName: deviceName,
+            platform: "browserExtension",
+            deviceId: devId
+          } 
         } satisfies SyncMessage));
       } catch (e) {
         finish({ success: false, reason: "Crypto exception generating ECDH." });
@@ -71,7 +82,8 @@ export function requestLanPairing(
 
 export function requestBlePairing(
   deviceName: string,
-  onPinReady: (pin: string) => void
+  onPinReady: (pin: string) => void,
+  forcePrompt: boolean = false
 ): Promise<PairingOutcome> {
   return new Promise(async (resolve) => {
     const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
@@ -81,29 +93,70 @@ export function requestBlePairing(
     let device: any;
     let server: any;
     
+    let connectionTimeout: ReturnType<typeof setTimeout>;
+    let aborted = false;
+    
     const finish = (result: PairingOutcome) => {
+      if (aborted) return;
+      aborted = true;
+      clearTimeout(connectionTimeout);
       try { if (server?.connected) server.disconnect(); } catch {}
       resolve(result);
     };
 
     try {
-      device = await (navigator as any).bluetooth.requestDevice({
-        filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
-      });
+      if (!forcePrompt) {
+        try {
+          const devices = await (navigator as any).bluetooth.getDevices();
+          device = devices.find((d: any) => !!d.id);
+        } catch (e) {}
+      }
+
+      if (!device) {
+        device = await (navigator as any).bluetooth.requestDevice({
+          filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+        });
+      }
+      connectionTimeout = setTimeout(() => {
+        finish({ success: false, reason: "Connection timed out. The phone is unreachable or not responding." });
+      }, 20000);
+      
+      try {
+        if (device.watchingAdvertisements !== undefined) {
+           await new Promise<void>((resolveAdv, rejectAdv) => {
+              const advTimeout = setTimeout(() => rejectAdv(new Error("Advertisement timeout: device is no longer in range")), 5000);
+              device.addEventListener("advertisementreceived", () => {
+                 clearTimeout(advTimeout);
+                 resolveAdv();
+              }, { once: true });
+              device.watchAdvertisements().catch(rejectAdv);
+           });
+        }
+      } catch(e) {
+        throw e;
+      }
+
       let char: any;
       for (let i = 0; i < 4; i++) {
         try {
           server = await device.gatt.connect();
+          if (aborted) return;
           await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
+          if (aborted) return;
           const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
+          if (aborted) return;
           char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
+          if (aborted) return;
           break; // Connected and services found
         } catch (e) {
+          if (aborted) return;
           if (i === 3) throw e; // Max retries
           console.warn(`GATT dropped, retrying in 1s... (${i+1}/4)`);
           await new Promise(r => setTimeout(r, 1000));
+          if (aborted) return;
         }
       }
+      if (!char || aborted) return;
       await char.startNotifications();
 
       let myKeyPair: CryptoKeyPair;
@@ -113,20 +166,24 @@ export function requestBlePairing(
       const send = async (msg: string) => {
         const encoder = new TextEncoder();
         const bytes = encoder.encode(msg + EOM_MARKER);
-        const chunkSize = 500;
+        const chunkSize = 480;
         for (let i = 0; i < bytes.length; i += chunkSize) {
-          await char.writeValueWithoutResponse(bytes.slice(i, i + chunkSize));
+          await char.writeValue(bytes.slice(i, i + chunkSize));
         }
       };
 
       char.addEventListener('characteristicvaluechanged', async (event: any) => {
-        const val = new Uint8Array(event.target.value.buffer);
-        const text = new TextDecoder().decode(val);
-        const eomIdx = text.indexOf(EOM_MARKER);
-        if (eomIdx !== -1) {
-          inboundBuffer += text.substring(0, eomIdx);
-          const fullMessage = inboundBuffer;
-          inboundBuffer = text.substring(eomIdx + 1);
+        const dataView = event.target.value; // DataView
+        const text = new TextDecoder().decode(dataView);
+        console.log(`[Ext/BLE Pairing] Received chunk len=${text.length}, text: ${text}`);
+        
+        inboundBuffer += text;
+
+        while (inboundBuffer.includes(EOM_MARKER)) {
+          const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
+          const fullMessage = inboundBuffer.substring(0, eomIdx);
+          inboundBuffer = inboundBuffer.substring(eomIdx + 1);
+          console.log(`[Ext/BLE Pairing] Complete message assembled: ${fullMessage}`);
 
           try {
             const message = JSON.parse(fullMessage) as SyncMessage;
@@ -147,9 +204,6 @@ export function requestBlePairing(
           } catch (e) {
             finish({ success: false, reason: "Malformed response from phone." });
           }
-
-        } else {
-          inboundBuffer += text;
         }
       });
 
@@ -159,9 +213,20 @@ export function requestBlePairing(
 
       myKeyPair = await generateEcdhKeyPair();
       const jwk = await exportJwEcdhKey(myKeyPair.publicKey);
+      let devId = await ExtensionStorage.getDeviceId();
+      if (!devId) {
+        devId = `ext_${Date.now()}`;
+        await ExtensionStorage.saveDeviceId(devId);
+      }
       await send(JSON.stringify({ 
         type: "pairingRequest", 
-        payload: { deviceName, pubKey: jwk } 
+        payload: { 
+          deviceName, 
+          pubKey: jwk,
+          clientName: deviceName,
+          platform: "browserExtension",
+          deviceId: devId
+        } 
       } as SyncMessage));
 
     } catch (e) {

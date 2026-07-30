@@ -27,7 +27,7 @@ async function buildSelfDeviceInfo(): Promise<DeviceInfo | null> {
  * anything real, rather than assuming any particular message ordering.
  */
 export interface SyncTransport {
-  send(message: string): void | Promise<void>;
+  send(message: string): Promise<void>;
   close(): void;
   onMessage: ((message: string) => void) | null;
   onError: ((err: Error) => void) | null;
@@ -37,7 +37,7 @@ export async function syncWithPhone(host: string, port: number, vek: CryptoKey):
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://${host}:${port}`);
     const transport: SyncTransport = {
-      send: (msg) => socket.send(msg),
+      send: async (msg) => { socket.send(msg); return Promise.resolve(); },
       close: () => socket.close(),
       onMessage: null,
       onError: null,
@@ -54,48 +54,91 @@ export async function syncWithPhone(host: string, port: number, vek: CryptoKey):
   });
 }
 
-export async function syncWithBlePhone(vek: CryptoKey): Promise<{ pulled: number; pushed: number }> {
+export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Promise<{ pulled: number; pushed: number }> {
   const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
   const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
   const EOM_MARKER = '\x04';
 
-  const device = await (navigator as any).bluetooth.requestDevice({
-    filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
-  });
+  let device: any;
+  if (!forcePrompt) {
+    try {
+      const devices = await (navigator as any).bluetooth.getDevices();
+      device = devices.find((d: any) => !!d.id);
+    } catch (e) {}
+  }
+
+  if (!device) {
+    device = await (navigator as any).bluetooth.requestDevice({
+      filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+    });
+  }
 
   let server: any;
   let char: any;
-  for (let i = 0; i < 4; i++) {
-    try {
-      server = await device.gatt.connect();
-      await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
-      const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
-      char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
-      break; // Connected and services found
-    } catch (e) {
-      if (i === 3) throw e; // Max retries
-      console.warn(`GATT dropped during sync, retrying in 1s... (${i+1}/4)`);
-      if (server?.connected) try { server.disconnect(); } catch{}
-      await new Promise(r => setTimeout(r, 1000));
+  let aborted = false;
+
+  await new Promise<void>(async (resolveConnection, rejectConnection) => {
+    const connectionTimeout = setTimeout(() => {
+      aborted = true;
+      if (server?.connected) { try { server.disconnect(); } catch{} }
+      rejectConnection(new Error("Connection timed out. The phone is unreachable or not responding."));
+    }, 20000);
+
+    // Removed watchAdvertisements logic because Windows Chrome regularly swallows
+    // advertisement events, causing a 5-second timeout even when the device is nearby
+    // and fully connectable via GATT.
+
+    for (let i = 0; i < 4; i++) {
+      try {
+        server = await device.gatt.connect();
+        if (aborted) return;
+        await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
+        if (aborted) return;
+        const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
+        if (aborted) return;
+        char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
+        if (aborted) return;
+        break; // Connected and services found
+      } catch (e) {
+        if (aborted) return;
+        if (i === 3) {
+          clearTimeout(connectionTimeout);
+          return rejectConnection(e);
+        }
+        console.warn(`GATT dropped during sync, retrying in 1s... (${i+1}/4)`);
+        if (server?.connected) try { server.disconnect(); } catch{}
+        await new Promise(r => setTimeout(r, 1000));
+        if (aborted) return;
+      }
     }
-  }
+    
+    clearTimeout(connectionTimeout);
+    resolveConnection();
+  });
+
+  if (aborted || !char) throw new Error("GATT connection aborted.");
+  
   await char.startNotifications();
+  await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time to prepare for instantaneous responses
 
   return new Promise((resolve, reject) => {
     let inboundBuffer = "";
+    let closing = false;
     
     const transport: SyncTransport = {
       send: async (msg) => {
         const encoder = new TextEncoder();
         const bytes = encoder.encode(msg + EOM_MARKER);
-        const chunkSize = 500;
+        const chunkSize = 480;
         for (let i = 0; i < bytes.length; i += chunkSize) {
-          await char.writeValueWithoutResponse(bytes.slice(i, i + chunkSize));
+          await char.writeValue(bytes.slice(i, i + chunkSize));
         }
       },
       close: () => {
+        if (closing) return;
+        closing = true;
         if (server.connected) {
-          server.disconnect();
+          try { server.disconnect(); } catch {}
         }
       },
       onMessage: null,
@@ -103,19 +146,29 @@ export async function syncWithBlePhone(vek: CryptoKey): Promise<{ pulled: number
     };
 
     char.addEventListener('characteristicvaluechanged', (event: any) => {
-      const val = new Uint8Array(event.target.value.buffer);
-      const text = new TextDecoder().decode(val);
-      const eomIdx = text.indexOf(EOM_MARKER);
-      if (eomIdx !== -1) {
-        inboundBuffer += text.substring(0, eomIdx);
-        transport.onMessage?.(inboundBuffer);
-        inboundBuffer = text.substring(eomIdx + 1);
-      } else {
-        inboundBuffer += text;
+      const dataView = event.target.value; // DataView
+      const text = new TextDecoder().decode(dataView);
+      console.log(`[Ext/BLE Sync] Received chunk len=${text.length}`);
+
+      inboundBuffer += text;
+
+      while (inboundBuffer.includes(EOM_MARKER)) {
+        const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
+        const fullMessage = inboundBuffer.substring(0, eomIdx);
+        inboundBuffer = inboundBuffer.substring(eomIdx + 1);
+        console.log(`[Ext/BLE Sync] Complete message assembled (type extraction pending)`);
+
+        try {
+          const message = JSON.parse(fullMessage) as SyncMessage;
+          transport.onMessage?.(fullMessage);
+        } catch (e) {
+          console.error("Failed to parse BLE message", e);
+        }
       }
     });
 
     device.addEventListener('gattserverdisconnected', () => {
+      if (closing) return; // Ignore disconnect events if we intentionally closed
       const err = new Error("BLE connection unexpectedly disconnected");
       if (transport.onError) transport.onError(err);
       else reject(err);
@@ -145,7 +198,7 @@ async function runSyncProtocol(
 
     const selfInfo = await buildSelfDeviceInfo();
     if (selfInfo) {
-      transport.send(JSON.stringify({ type: "deviceInfo", payload: { devices: [selfInfo] } } satisfies SyncMessage));
+      await transport.send(JSON.stringify({ type: "deviceInfo", payload: { devices: [selfInfo] } } satisfies SyncMessage));
     }
 
     const mine = await ExtensionStorage.getAllEntries();
@@ -155,7 +208,7 @@ async function runSyncProtocol(
       lastUpdated: e.lastUpdated,
       deleted: e.deleted,
     }));
-    transport.send(JSON.stringify({ type: "metadata", payload: { entries: metadata } } satisfies SyncMessage));
+    await transport.send(JSON.stringify({ type: "metadata", payload: { entries: metadata } } satisfies SyncMessage));
   };
 
   transport.onMessage = async (rawJson: string) => {
@@ -166,7 +219,7 @@ async function runSyncProtocol(
         case "hello": {
           console.log(`Sync transport: Answering phone's hello challenge...`);
           const mac = await hmacSha256(syncAuthKey, message.payload.nonce as string);
-          transport.send(JSON.stringify({ type: "helloResponse", payload: { mac } } satisfies SyncMessage));
+          await transport.send(JSON.stringify({ type: "helloResponse", payload: { mac } } satisfies SyncMessage));
           break;
         }
         case "helloResponse": {
@@ -190,7 +243,7 @@ async function runSyncProtocol(
           const uuids = message.payload.uuids as string[];
           const mine = await ExtensionStorage.getAllEntries();
           const requested = mine.filter((e) => uuids.includes(e.uuid));
-          transport.send(JSON.stringify({ type: "records", payload: { entries: requested } } satisfies SyncMessage));
+          await transport.send(JSON.stringify({ type: "records", payload: { entries: requested } } satisfies SyncMessage));
           pushed += requested.length;
           break;
         }
@@ -267,7 +320,17 @@ async function runSyncProtocol(
   resetQuietTimer();
   const nonce = crypto.getRandomValues(new Uint8Array(16));
   sentNonceBase64 = btoa(String.fromCharCode(...nonce));
-  transport.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage));
+  
+  const ping = () => {
+    if (handshakeConfirmed) return;
+    try { transport.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage)); } catch {}
+  };
+  
+  ping();
+  setTimeout(ping, 300);
+  setTimeout(ping, 1000);
+  setTimeout(ping, 2500);
+  setTimeout(ping, 5000);
 }
 
 /** Recomputes a record's sync hash after a local edit/capture, using the

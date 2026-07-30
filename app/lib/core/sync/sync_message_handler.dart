@@ -49,7 +49,11 @@ class SyncConnectionHandler {
   //  Handshake
   // ─────────────────────────────────────────────────────────
 
+  bool _challengeSent = false;
+
   Future<void> sendChallenge() async {
+    if (_challengeSent) return;
+    _challengeSent = true;
     final nonce = _randomBytes(16);
     _sentNonceBase64 = base64Encode(nonce);
     transport.send(SyncMessage(SyncMsgType.hello, {'nonce': _sentNonceBase64}).encode());
@@ -125,7 +129,9 @@ class SyncConnectionHandler {
     switch (message.type) {
       case SyncMsgType.metadata:
         await DeviceManager.instance.touchSelfLastSynced();
-        final theirs = (message.payload['entries'] as List)
+        final rawEntries = message.payload['entries'] as List?;
+        if (rawEntries == null) break;
+        final theirs = rawEntries
             .map((e) => RecordMeta.fromJson(e as Map<String, dynamic>))
             .toList();
         final mine = localMetadata();
@@ -145,13 +151,17 @@ class SyncConnectionHandler {
         break;
 
       case SyncMsgType.request:
-        final uuids = (message.payload['uuids'] as List).cast<String>();
+        final rawUuids = message.payload['uuids'] as List?;
+        if (rawUuids == null) break;
+        final uuids = rawUuids.cast<String>();
         final records = _wireRecordsFor(uuids);
         transport.send(SyncMessage(SyncMsgType.records, {'entries': records.map((r) => r.toJson()).toList()}).encode());
         break;
 
       case SyncMsgType.records:
-        final entries = (message.payload['entries'] as List).map((e) => WireRecord.fromJson(e as Map<String, dynamic>));
+        final rawEntries = message.payload['entries'] as List?;
+        if (rawEntries == null) break;
+        final entries = rawEntries.map((e) => WireRecord.fromJson(e as Map<String, dynamic>));
         await _applyIncomingRecords(entries.toList());
         if (awaitingRecordsReply) {
           awaitingRecordsReply = false;
@@ -161,14 +171,17 @@ class SyncConnectionHandler {
         break;
 
       case SyncMsgType.deviceInfo:
-        final infos = (message.payload['devices'] as List)
+        final rawDevices = message.payload['devices'] as List?;
+        if (rawDevices == null) break;
+        final infos = rawDevices
             .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
             .toList();
         await DeviceManager.instance.mergeIncomingDeviceInfos(infos);
         break;
 
       case SyncMsgType.authRequest:
-        final requestId = message.payload['requestId'] as String;
+        final requestId = message.payload['requestId'] as String?;
+        if (requestId == null) break;
         final actionLabel = message.payload['actionLabel'] as String? ?? 'access a saved password';
         bool approved;
         try {
@@ -224,6 +237,23 @@ class SyncConnectionHandler {
       final approved = handler == null ? false : await handler(deviceName, pin);
 
       if (approved) {
+        final deviceId = msg.payload['deviceId'] as String?;
+        final clientName = msg.payload['clientName'] as String?;
+        final platform = msg.payload['platform'] as String?;
+
+        if (deviceId != null) {
+          await DeviceManager.instance.mergeIncomingDeviceInfos([
+            DeviceInfo(
+              deviceId: deviceId,
+              displayName: clientName ?? deviceName,
+              platform: platform ?? "chrome",
+              pairedAt: DateTime.now().toUtc(),
+              lastSyncedAt: DateTime.now().toUtc(),
+              revoked: false,
+            )
+          ]);
+        }
+
         final wrappingKey = await engine.deriveEcdhWrappingKey(sharedSecret);
         final wrappedVek = await engine.wrapKey(keyToWrap: VaultSession.instance.vek, wrappingKey: wrappingKey);
         final selfInfo = DeviceManager.instance.selfDeviceInfo();

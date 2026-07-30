@@ -109,7 +109,12 @@ async function offerAutofill() {
   const passwordField = fields.find((f) => f.kind === "password");
   if (!passwordField || document.getElementById("peervault-autofill-chip")) return;
 
-  const response = await chrome.runtime.sendMessage({ type: "FIND_MATCHES", domain: getDomain() });
+  let response: any;
+  try {
+    response = await chrome.runtime.sendMessage({ type: "FIND_MATCHES", domain: getDomain() });
+  } catch(e) {
+    return; // Usually happens during Extension Development hard-reloads
+  }
   const entries = (response?.entries ?? []) as MatchEntry[];
   if (response?.locked || !entries.length) return;
 
@@ -157,12 +162,16 @@ async function offerAutofill() {
         ev.stopPropagation();
         dropdown.remove();
         chip.textContent = "Approving…";
-        const result = await chrome.runtime.sendMessage({ type: "AUTOFILL_TAB", uuid: entry.uuid });
-        if (result?.filled) {
-          chip.remove();
-        } else {
-          chip.textContent = "Failed. Locked?";
-          setTimeout(() => chip.remove(), 2000);
+        try {
+          const result = await chrome.runtime.sendMessage({ type: "AUTOFILL_TAB", uuid: entry.uuid });
+          if (result?.filled) {
+            chip.remove();
+          } else {
+            chip.textContent = "Failed. Locked?";
+            setTimeout(() => chip.remove(), 2000);
+          }
+        } catch (e) {
+           chip.remove();
         }
       });
       dropdown.appendChild(item);
@@ -319,7 +328,7 @@ function watchForCredentialSubmission() {
       domain: getDomain(),
       username: usernameField?.input.value ?? "",
       password: passwordField.input.value,
-    });
+    }).catch(() => {});
   };
 
   // 1. Standard HTML form submit
@@ -388,7 +397,10 @@ function showSaveBanner(domain: string, username: string, password: string) {
     label.textContent = "Saving…";
     saveBtn.remove();
     dismissBtn.remove();
-    const result = await chrome.runtime.sendMessage({ type: "CAPTURE_CREDENTIAL", domain, username, password });
+    let result: any;
+    try {
+      result = await chrome.runtime.sendMessage({ type: "CAPTURE_CREDENTIAL", domain, username, password });
+    } catch(e) {}
     label.textContent = result?.saved ? "Saved to PeerVault." : "Couldn't save — is PeerVault paired?";
     resolveSave();
     setTimeout(() => banner.remove(), 2500);

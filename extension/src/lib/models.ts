@@ -43,7 +43,7 @@ export type SyncMessage =
   | { type: "error"; payload: { message: string } }
   | { type: "authRequest"; payload: { requestId: string; actionLabel: string } }
   | { type: "authResponse"; payload: { requestId: string; approved: boolean } }
-  | { type: "pairingRequest"; payload: { deviceName: string; pubKey: string } }
+  | { type: "pairingRequest"; payload: { deviceName: string; pubKey: string; clientName?: string; platform?: string; deviceId?: string; } }
   | { type: "pairingChallenge"; payload: { pubKey: string } }
   | { type: "pairingSuccess"; payload: { wrappedVek: string; device: DeviceInfo } };
 

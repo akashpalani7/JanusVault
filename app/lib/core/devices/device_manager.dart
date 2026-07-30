@@ -14,18 +14,22 @@ class PairingPackage {
   final String pairingCodePrintable;
   final String wrappedVekForTransitBase64;
 
-  const PairingPackage({required this.pairingCodePrintable, required this.wrappedVekForTransitBase64});
+  const PairingPackage(
+      {required this.pairingCodePrintable,
+      required this.wrappedVekForTransitBase64});
 
   /// Encodes as a single string suitable for a QR code or manual typing:
   /// "peervault-pair:v2:<code>:<wrappedVek>"
-  String encode() => 'peervault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
+  String encode() =>
+      'peervault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
 
   static PairingPackage decode(String raw) {
     final parts = raw.split(':');
     if (parts.length != 4 || parts[0] != 'peervault-pair' || parts[1] != 'v2') {
       throw const FormatException('Not a valid PeerVault pairing code');
     }
-    return PairingPackage(pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3]);
+    return PairingPackage(
+        pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3]);
   }
 }
 
@@ -38,7 +42,8 @@ class DeviceManager {
   /// Called once, on first-ever app launch, before any vault exists.
   /// Generates this device's local key and registers it as the first
   /// trusted device holding a freshly generated VEK.
-  Future<String> initializeFirstDevice({required String displayName, required DevicePlatform platform}) async {
+  Future<String> initializeFirstDevice(
+      {required String displayName, required DevicePlatform platform}) async {
     final engine = CryptoEngine.instance;
 
     final deviceLocalKey = await engine.generateDeviceLocalKey();
@@ -47,7 +52,8 @@ class DeviceManager {
     final vek = await engine.generateVek();
     VaultSession.instance.installVekDirectly(vek);
 
-    final wrapped = await engine.wrapKey(keyToWrap: vek, wrappingKey: deviceLocalKey);
+    final wrapped =
+        await engine.wrapKey(keyToWrap: vek, wrappingKey: deviceLocalKey);
 
     final deviceId = 'dev_${DateTime.now().microsecondsSinceEpoch}';
     final now = DateTime.now().toUtc();
@@ -79,7 +85,8 @@ class DeviceManager {
     final engine = CryptoEngine.instance;
     final code = engine.generatePairingCode();
     final pairingKey = await engine.derivePairingKeyFromCode(code);
-    final wrapped = await engine.wrapKey(keyToWrap: VaultSession.instance.vek, wrappingKey: pairingKey);
+    final wrapped = await engine.wrapKey(
+        keyToWrap: VaultSession.instance.vek, wrappingKey: pairingKey);
     return PairingPackage(
       pairingCodePrintable: engine.encodePairingCode(code),
       wrappedVekForTransitBase64: wrapped.toBase64(),
@@ -99,16 +106,19 @@ class DeviceManager {
 
     final code = engine.decodePairingCode(package.pairingCodePrintable);
     final pairingKey = await engine.derivePairingKeyFromCode(code);
-    final transitBlob = EncryptedBlob.fromBase64(package.wrappedVekForTransitBase64);
+    final transitBlob =
+        EncryptedBlob.fromBase64(package.wrappedVekForTransitBase64);
 
     // Wrong code -> AES-GCM MAC failure -> throws. No partial/garbage
     // decryption is possible, which is exactly the property we want.
-    final vek = await engine.unwrapKey(wrapped: transitBlob, wrappingKey: pairingKey);
+    final vek =
+        await engine.unwrapKey(wrapped: transitBlob, wrappingKey: pairingKey);
     VaultSession.instance.installVekDirectly(vek);
 
     final deviceLocalKey = await engine.generateDeviceLocalKey();
     await SecureKeyStore.instance.saveDeviceLocalKey(deviceLocalKey);
-    final wrappedForStorage = await engine.wrapKey(keyToWrap: vek, wrappingKey: deviceLocalKey);
+    final wrappedForStorage =
+        await engine.wrapKey(keyToWrap: vek, wrappingKey: deviceLocalKey);
 
     final deviceId = 'dev_${DateTime.now().microsecondsSinceEpoch}';
     final now = DateTime.now().toUtc();
@@ -157,14 +167,17 @@ class DeviceManager {
   /// once B syncs with A, A learns about C too without ever meeting it).
   List<DeviceInfo> knownPeerDeviceInfos() {
     final selfId = _db.settings?.selfDeviceId;
-    return _db.allDevices.where((d) => d.deviceId != selfId).map((r) => DeviceInfo(
-          deviceId: r.deviceId,
-          displayName: r.displayName,
-          platform: r.platform,
-          pairedAt: r.pairedAt,
-          lastSyncedAt: r.lastSyncedAt,
-          revoked: r.revoked,
-        )).toList();
+    return _db.allDevices
+        .where((d) => d.deviceId != selfId)
+        .map((r) => DeviceInfo(
+              deviceId: r.deviceId,
+              displayName: r.displayName,
+              platform: r.platform,
+              pairedAt: r.pairedAt,
+              lastSyncedAt: r.lastSyncedAt,
+              revoked: r.revoked,
+            ))
+        .toList();
   }
 
   /// Merges a batch of [DeviceInfo] learned from a sync peer into the
@@ -256,7 +269,8 @@ class DeviceManager {
 
     final deviceLocalKey = await SecureKeyStore.instance.loadDeviceLocalKey();
     if (deviceLocalKey == null) throw StateError('No local device key found');
-    final wrapped = await engine.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey);
+    final wrapped =
+        await engine.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey);
 
     final record = _db.findDeviceById(selfDeviceId);
     if (record != null) {

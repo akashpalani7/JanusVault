@@ -133,8 +133,13 @@ class SyncMessage {
 
   static SyncMessage decode(String raw) {
     final json = jsonDecode(raw) as Map<String, dynamic>;
-    final type = SyncMsgType.values.byName(json['type'] as String);
-    return SyncMessage(type, json['payload'] as Map<String, dynamic>);
+    final typeStr = json['type'] as String? ?? '';
+    final type = SyncMsgType.values.byName(typeStr);
+    final payloadRaw = json['payload'];
+    final payload = payloadRaw is Map<String, dynamic>
+        ? payloadRaw
+        : (payloadRaw is Map ? Map<String, dynamic>.from(payloadRaw) : <String, dynamic>{});
+    return SyncMessage(type, payload);
   }
 }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter/services.dart';
 import 'package:cryptography_flutter/cryptography_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,9 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 // Android.
 // ignore: unused_import
 import 'autofill_entrypoint.dart';
-
 import 'core/auth/biometric_auth.dart';
 import 'core/storage/vault_database.dart';
+import 'core/sync/ble_gatt_service.dart';
 import 'core/sync/lan_sync_service.dart';
 import 'features/unlock/setup_screen.dart';
 import 'features/unlock/unlock_screen.dart';
@@ -40,7 +42,21 @@ Future<void> main() async {
   // screen to prompt on, e.g. mid-cold-start.
   LanSyncService.instance.onAuthPromptRequested = (actionLabel) async {
     final context = rootNavigatorKey.currentContext;
-    if (context == null) return false;
+    final isBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+
+    if (context == null || isBackground) {
+      final completer = Completer<bool>();
+      const channel = MethodChannel('com.peervault.app/main_auth');
+      channel.setMethodCallHandler((call) async {
+        if (call.method == 'resolveApproval') {
+          if (!completer.isCompleted) {
+            completer.complete(call.arguments['approved'] as bool? ?? false);
+          }
+        }
+      });
+      await channel.invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
+      return completer.future.timeout(const Duration(seconds: 55), onTimeout: () => false);
+    }
 
     final wantsToApprove = await showDialog<bool>(
       context: context,
@@ -111,6 +127,12 @@ Future<void> main() async {
     );
     return result.success;
   };
+
+  // Wire up the same handlers for BLE GATT Sync
+  BleGattService.instance.onAuthPromptRequested =
+      LanSyncService.instance.onAuthPromptRequested;
+  BleGattService.instance.onPairingRequested =
+      LanSyncService.instance.onPairingRequested;
 
   runApp(const ProviderScope(child: PeerVaultApp()));
 }

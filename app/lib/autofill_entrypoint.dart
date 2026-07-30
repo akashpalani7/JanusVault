@@ -21,6 +21,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
 import 'core/storage/vault_database.dart';
+import 'core/sync/ble_gatt_service.dart';
 import 'core/sync/lan_sync_service.dart';
 import 'core/vault/vault_repository.dart';
 import 'core/vault/vault_session.dart';
@@ -180,12 +181,24 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
     await _channel.invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
     return _pendingApprovalCompleter!.future.timeout(const Duration(seconds: 55), onTimeout: () => false);
   };
+  BleGattService.instance.onAuthPromptRequested = LanSyncService.instance.onAuthPromptRequested;
 
-  await LanSyncService.instance.startAdvertisingAndServing(deviceDisplayName: displayName);
+  try {
+    await LanSyncService.instance.startAdvertisingAndServing(deviceDisplayName: displayName);
+  } catch (e) {
+    print('LanSync autofill start failed: $e');
+  }
+
+  try {
+    await BleGattService.instance.startAdvertising(deviceDisplayName: displayName);
+  } catch (e) {
+    print('Ble autofill start failed: $e');
+  }
 }
 
 Future<void> _stopSyncListening() async {
   await LanSyncService.instance.stopAdvertisingAndServing();
+  await BleGattService.instance.stopAdvertising();
 }
 
 Future<void> _resolveApproval(Map<dynamic, dynamic> args) async {

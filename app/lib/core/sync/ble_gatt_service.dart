@@ -46,6 +46,7 @@ class BleGattService {
 
   bool _isAdvertising = false;
   bool get isAdvertising => _isAdvertising;
+  bool _isInitialized = false;
 
   void Function()? recordsUpdatedCallback;
   Future<bool> Function(String actionLabel)? onAuthPromptRequested;
@@ -67,31 +68,34 @@ class BleGattService {
     if (_isAdvertising) return;
 
     try {
-      // Initialize the BLE peripheral plugin
-      await BlePeripheral.initialize();
+      if (!_isInitialized) {
+        // Initialize the BLE peripheral plugin
+        await BlePeripheral.initialize();
 
-      // Add our custom sync service + characteristic
-      await BlePeripheral.addService(
-        BleService(
-          uuid: kPeerVaultBleServiceUuid,
-          primary: true,
-          characteristics: [
-            BleCharacteristic(
-              uuid: kSyncCharacteristicUuid,
-              properties: [
-                CharacteristicProperties.read.index,
-                CharacteristicProperties.write.index,
-                CharacteristicProperties.writeWithoutResponse.index,
-                CharacteristicProperties.notify.index,
-              ],
-              permissions: [
-                AttributePermissions.readable.index,
-                AttributePermissions.writeable.index,
-              ],
-            ),
-          ],
-        ),
-      );
+        // Add our custom sync service + characteristic
+        await BlePeripheral.addService(
+          BleService(
+            uuid: kPeerVaultBleServiceUuid,
+            primary: true,
+            characteristics: [
+              BleCharacteristic(
+                uuid: kSyncCharacteristicUuid,
+                properties: [
+                  CharacteristicProperties.read.index,
+                  CharacteristicProperties.write.index,
+                  CharacteristicProperties.writeWithoutResponse.index,
+                  CharacteristicProperties.notify.index,
+                ],
+                permissions: [
+                  AttributePermissions.readable.index,
+                  AttributePermissions.writeable.index,
+                ],
+              ),
+            ],
+          ),
+        );
+        _isInitialized = true;
+      }
 
       // Listen for incoming writes on the sync characteristic
       BlePeripheral.setWriteRequestCallback(_onWriteRequest);
@@ -104,7 +108,8 @@ class BleGattService {
       );
 
       _isAdvertising = true;
-      print('BleGattService: Advertising started as PeerVault-$deviceDisplayName');
+      print(
+          'BleGattService: Advertising started as PeerVault-$deviceDisplayName');
     } catch (e) {
       String errMsg = e.toString();
       if (errMsg.contains('UnsupportedOperationException')) {
@@ -137,23 +142,37 @@ class BleGattService {
   /// Called when the BLE central (browser extension on PC) writes data
   /// to our sync characteristic. Data arrives chunked; we accumulate
   /// until we see the EOM marker, then process the complete JSON message.
-  WriteRequestResult? _onWriteRequest(String deviceId, String characteristicId, int offset, Uint8List? value) {
-    final chunk = utf8.decode(value ?? []);
+  WriteRequestResult? _onWriteRequest(
+      String deviceId, String characteristicId, int offset, Uint8List? value) {
+    if (value == null || value.isEmpty) return null;
 
+    final chunk = utf8.decode(value, allowMalformed: true);
+    print(
+        'BleGattService: _onWriteRequest chunk length: ${chunk.length}, EOM: ${chunk.contains(kEomMarker)}');
     _incomingBuffer.write(chunk);
     final currentBuffer = _incomingBuffer.toString();
 
-    if (currentBuffer.endsWith(kEomMarker)) {
-      // Last chunk — strip the marker and process
-      final completeMessage = currentBuffer.substring(0, currentBuffer.length - kEomMarker.length);
+    if (currentBuffer.contains(kEomMarker)) {
+      final parts = currentBuffer.split(kEomMarker);
       _incomingBuffer.clear();
 
-      _processIncomingMessage(completeMessage, deviceId);
+      // If the last part is not complete (didn't end with EOM), keep it in buffer
+      if (parts.last.isNotEmpty) {
+        _incomingBuffer.write(parts.last);
+      }
+
+      for (var i = 0; i < parts.length - 1; i++) {
+        final completeMessage = parts[i].trim();
+        if (completeMessage.isNotEmpty) {
+          _processIncomingMessage(completeMessage, deviceId);
+        }
+      }
     }
     return null; // Acknowledge successfully
   }
 
-  ReadRequestResult? _onReadRequest(String deviceId, String characteristicId, int offset, Uint8List? value) {
+  ReadRequestResult? _onReadRequest(
+      String deviceId, String characteristicId, int offset, Uint8List? value) {
     return ReadRequestResult(value: Uint8List(0));
   }
 
@@ -165,7 +184,8 @@ class BleGattService {
       // Lazily create the handler on first message (connection start)
       _handler ??= SyncConnectionHandler(
         transport: _BleTransport(deviceId),
-        vek: VaultSession.instance.isUnlocked ? VaultSession.instance.vek : null,
+        vek:
+            VaultSession.instance.isUnlocked ? VaultSession.instance.vek : null,
         onAuthPromptRequested: onAuthPromptRequested,
         onPairingRequested: onPairingRequested,
         onRecordsUpdated: recordsUpdatedCallback,
@@ -183,12 +203,15 @@ class BleGattService {
 
       // After successful auth, send device info
       final currentHandler = _handler;
-      if (currentHandler != null && currentHandler.authenticated && message.type == SyncMsgType.helloResponse) {
+      if (currentHandler != null &&
+          currentHandler.authenticated &&
+          message.type == SyncMsgType.helloResponse) {
         currentHandler.sendDeviceInfo();
       }
     } catch (e) {
       print('BleGattService: Error processing message: $e');
-      final errorMsg = SyncMessage(SyncMsgType.error, {'message': e.toString()});
+      final errorMsg =
+          SyncMessage(SyncMsgType.error, {'message': e.toString()});
       _sendChunkedNotification(deviceId, errorMsg.encode());
     }
   }
@@ -199,18 +222,32 @@ class BleGattService {
 
   /// Sends a message to the connected central by notifying on the sync
   /// characteristic. Large messages are automatically chunked.
-  static void _sendChunkedNotification(String deviceId, String jsonMessage) {
+  static Future<void> _sendChunkedNotification(String deviceId, String jsonMessage) async {
+    print('BleGattService: _sendChunkedNotification (len=${jsonMessage.length})');
     final data = '$jsonMessage$kEomMarker';
     final bytes = utf8.encode(data);
 
     for (var offset = 0; offset < bytes.length; offset += kBleChunkSize) {
-      final end = (offset + kBleChunkSize > bytes.length) ? bytes.length : offset + kBleChunkSize;
+      final end = (offset + kBleChunkSize > bytes.length)
+          ? bytes.length
+          : offset + kBleChunkSize;
       final chunk = Uint8List.fromList(bytes.sublist(offset, end));
-      BlePeripheral.updateCharacteristic(
-        characteristicId: kSyncCharacteristicUuid,
-        value: chunk,
-        deviceId: deviceId,
-      );
+      try {
+        print('BleGattService: Instructing native plugin to notify chunk len=${chunk.length} to deviceId=$deviceId');
+        BlePeripheral.updateCharacteristic(
+          characteristicId: kSyncCharacteristicUuid,
+          value: chunk,
+          deviceId: deviceId, // restore deviceId targeting
+        );
+        print('BleGattService: updateCharacteristic returned successfully for chunk');
+        
+        // Critical: Provide generous spacing between Bluetooth notifications.
+        // Windows and certain generic Android adapters will silently discard overlapping 
+        // synchronous notifications if pushed too quickly inside the same GATT interval.
+        await Future.delayed(const Duration(milliseconds: 60));
+      } catch (e) {
+        print('BleGattService: FAILED to updateCharacteristic: $e');
+      }
     }
   }
 }
@@ -219,18 +256,39 @@ class BleGattService {
 /// notifications on the GATT sync characteristic.
 class _BleTransport implements SyncTransport {
   final String deviceId;
+
   _BleTransport(this.deviceId);
+
+  static final List<Future<void> Function()> _queue = [];
+  static bool _processing = false;
 
   @override
   void send(String jsonMessage) {
-    BleGattService._sendChunkedNotification(deviceId, jsonMessage);
+    // We queue writes asynchronously to guarantee they space out. 
+    // Synchronous calls to the Flutter bridge will instantly collide in the OS radio 
+    // and drop the notification packets entirely.
+    _queue.add(() => BleGattService._sendChunkedNotification(deviceId, jsonMessage));
+    _processQueue();
+  }
+
+  static Future<void> _processQueue() async {
+    if (_processing) return;
+    _processing = true;
+    while (_queue.isNotEmpty) {
+      final task = _queue.removeAt(0);
+      try {
+        await task();
+      } catch (e) {
+        print('BleGattService: Caught exception in queue task $e');
+      }
+    }
+    _processing = false;
   }
 
   @override
   Future<void> close() async {
-    // BLE connections are managed by the central (PC) side.
-    // The peripheral just stops responding; the central will
-    // disconnect after seeing the 'done' message.
+    // BLE connection lifecycle is managed externally by the central device.
+    // The peripheral's job is passive in GATT. No action on this end is required.
     BleGattService.instance._handler = null;
     BleGattService.instance._incomingBuffer.clear();
   }

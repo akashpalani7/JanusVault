@@ -21,6 +21,7 @@ const emptyHint = document.getElementById("emptyHint") as HTMLParagraphElement;
 const hostInput = document.getElementById("hostInput") as HTMLInputElement;
 const syncButton = document.getElementById("syncButton") as HTMLButtonElement;
 const syncBleButton = document.getElementById("syncBleButton") as HTMLButtonElement;
+const authMethodSelect = document.getElementById("authMethodSelect") as HTMLSelectElement;
 const syncStatus = document.getElementById("syncStatus") as HTMLParagraphElement;
 const deviceNameInput = document.getElementById("deviceNameInput") as HTMLInputElement;
 const pairingInput = document.getElementById("pairingInput") as HTMLTextAreaElement;
@@ -261,6 +262,28 @@ syncButton.addEventListener("click", async () => {
 });
 
 syncBleButton.addEventListener("click", async () => {
+  let paired = false;
+  try {
+    const devices = await (navigator as any).bluetooth.getDevices();
+    paired = !!devices.find((d: any) => !!d.id);
+  } catch (e) {}
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const isPopout = urlParams.has("popout");
+  const forcePrompt = urlParams.get("forcePrompt") === "true";
+
+  if (!paired && !isPopout) {
+    chrome.windows.create({
+      url: chrome.runtime.getURL("popup/popup.html?popout=sync"),
+      type: "normal", 
+      width: 450,
+      height: 650,
+      focused: true
+    });
+    window.close(); 
+    return;
+  }
+
   syncStatus.textContent = "Requesting Bluetooth connection...";
   
   const rawKeyBase64 = await ExtensionStorage.getDeviceLocalKeyRaw();
@@ -274,13 +297,34 @@ syncBleButton.addEventListener("click", async () => {
     const deviceLocalKey = await crypto.subtle.importKey("raw", rawKeyBytes, "AES-GCM", false, ["decrypt"]);
     const vek = await unwrapVek(wrappedVek, deviceLocalKey);
 
-    const response = await syncWithBlePhone(vek);
+    let response: any;
+    try {
+      response = await syncWithBlePhone(vek, forcePrompt);
+    } catch(e: any) {
+      if (!forcePrompt && !e.message.includes("globally disabled") && !e.message.includes("Bluetooth API is disabled") && !e.message.includes("User cancelled")) {
+         if (!isPopout) {
+           chrome.windows.create({
+             url: chrome.runtime.getURL("popup/popup.html?popout=sync&forcePrompt=true"),
+             type: "normal", width: 450, height: 650, focused: true
+           });
+           window.close();
+           return;
+         } else {
+           response = await syncWithBlePhone(vek, true);
+         }
+      } else {
+         throw e;
+      }
+    }
+
     syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
     await runSearch(searchInput.value);
   } catch(e) {
     const msg = (e as Error).message;
     if (msg.includes("globally disabled") || msg.includes("Bluetooth API is disabled")) {
       syncStatus.innerHTML = `Bluetooth sync failed: Web Bluetooth API is disabled. Please enable it in <b>chrome://flags/#enable-web-bluetooth</b> or your browser's settings.`;
+    } else if (msg.includes("User cancelled")) {
+      syncStatus.textContent = `Bluetooth sync cancelled.`;
     } else {
       syncStatus.textContent = `Bluetooth sync failed: ${msg}`;
     }
@@ -332,7 +376,8 @@ lanPairButton.addEventListener("click", async () => {
       type: "COMPLETE_LAN_PAIRING", 
       wrappedVek: outcome.wrappedVek, 
       sharedSecretArray: Array.from(outcome.sharedSecret),
-      deviceName: name 
+      deviceName: name,
+      peerDevice: outcome.device
     });
     
     if (res?.paired) {
@@ -353,6 +398,28 @@ lanPairButton.addEventListener("click", async () => {
 });
 
 blePairButton.addEventListener("click", async () => {
+  let paired = false;
+  try {
+    const devices = await (navigator as any).bluetooth.getDevices();
+    paired = !!devices.find((d: any) => !!d.id);
+  } catch (e) {}
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const isPopout = urlParams.has("popout");
+  const forcePrompt = urlParams.get("forcePrompt") === "true";
+
+  if (!paired && !isPopout) {
+    chrome.windows.create({
+      url: chrome.runtime.getURL("popup/popup.html?popout=pair"),
+      type: "normal",
+      width: 450,
+      height: 650,
+      focused: true
+    });
+    window.close();
+    return;
+  }
+
   const name = deviceNameInput.value.trim() || "Paired Browser";
 
   pairStatus.textContent = "Connecting to phone...";
@@ -360,18 +427,30 @@ blePairButton.addEventListener("click", async () => {
   blePairButton.disabled = true;
 
   try {
-    const outcome = await requestBlePairing(name, (pin) => {
+    let outcome = await requestBlePairing(name, (pin) => {
       pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
-    });
+    }, forcePrompt);
+
+    if (!outcome.success && !forcePrompt && !outcome.reason.includes("globally disabled") && !outcome.reason.includes("Bluetooth API is disabled") && !outcome.reason.includes("User cancelled")) {
+       if (!isPopout) {
+          chrome.windows.create({
+            url: chrome.runtime.getURL("popup/popup.html?popout=pair&forcePrompt=true"),
+            type: "normal", width: 450, height: 650, focused: true
+          });
+          window.close();
+          return;
+       } else {
+          outcome = await requestBlePairing(name, (pin) => {
+            pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
+          }, true);
+       }
+    }
 
     if (!outcome.success) {
       if (outcome.reason.includes("globally disabled") || outcome.reason.includes("Bluetooth API is disabled")) {
         pairStatus.innerHTML = `Pairing failed: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
       } else if (outcome.reason.includes("User cancelled")) {
-        pairStatus.innerHTML = `Dialog blocked. Chromium often suppresses Bluetooth popups in extension drop-downs. <br><a href="#" id="openPairTab">Open in Full Tab to Fix</a>`;
-        document.getElementById('openPairTab')?.addEventListener('click', () => {
-          chrome.tabs.create({ url: chrome.runtime.getURL("popup/popup.html") });
-        });
+        pairStatus.textContent = `Dialog cancelled.`;
       } else {
         pairStatus.textContent = `Pairing failed: ${outcome.reason}`;
       }
@@ -385,7 +464,8 @@ blePairButton.addEventListener("click", async () => {
       type: "COMPLETE_LAN_PAIRING", 
       wrappedVek: outcome.wrappedVek, 
       sharedSecretArray: Array.from(outcome.sharedSecret),
-      deviceName: name 
+      deviceName: name,
+      peerDevice: outcome.device
     });
     
     if (res?.paired) {
@@ -401,10 +481,7 @@ blePairButton.addEventListener("click", async () => {
     if (msg.includes("globally disabled") || msg.includes("Bluetooth API is disabled")) {
       pairStatus.innerHTML = `Error: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
     } else if (msg.includes("User cancelled")) {
-      pairStatus.innerHTML = `Dialog blocked. <br><a href="#" id="openPairTabFallback">Open in Full Tab to Fix</a>`;
-      document.getElementById('openPairTabFallback')?.addEventListener('click', () => {
-        chrome.tabs.create({ url: chrome.runtime.getURL("popup/popup.html") });
-      });
+      pairStatus.textContent = `Dialog cancelled.`;
     } else {
       pairStatus.textContent = `Error: ${msg}`;
     }
@@ -632,3 +709,65 @@ importFileInput.addEventListener("change", async () => {
   importFileInput.value = "";
   await runSearch(searchInput.value);
 });
+
+// ---------------------------------------------------------------------
+// URL Param overrides (for normal window popout flow)
+// ---------------------------------------------------------------------
+const urlParamsExt = new URLSearchParams(window.location.search);
+if (urlParamsExt.get("popout") === "sync") {
+  syncStatus.textContent = "Please click 'Sync via Bluetooth' again to authorize.";
+} else if (urlParamsExt.get("popout") === "pair") {
+  pairStatus.textContent = "Please click 'Pair via Bluetooth' again to authorize.";
+} else if (urlParamsExt.get("popout") === "auth") {
+  const rid = urlParamsExt.get("rid");
+  const actionLabel = urlParamsExt.get("actionLabel") || "Action";
+
+  document.body.innerHTML = `
+    <div style="padding: 20px; text-align: center;">
+      <h2 style="font-size: 16px; margin-top: 20px;">Reconnecting to Phone</h2>
+      <p style="font-size: 13px; color: #666; margin-bottom: 20px; margin-top: 10px;">PeerVault needs permission to connect to your phone's randomized Bluetooth address to approve:<br><br><b style="font-size: 15px; color: #333;">${actionLabel}</b></p>
+      <button id="reauthBtn" style="width: 100%; padding: 10px; background: #4b4bff; color: white; border: none; border-radius: 6px; cursor: pointer;">Select Phone</button>
+      <p id="reauthStatus" style="margin-top: 10px; font-size: 12px;"></p>
+    </div>
+  `;
+
+  document.getElementById("reauthBtn")?.addEventListener("click", async () => {
+     const stat = document.getElementById("reauthStatus")!;
+     try {
+       stat.textContent = "Requesting device picker...";
+       const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+       await (navigator as any).bluetooth.requestDevice({
+         filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+       });
+       stat.textContent = "Authorized. Processing request...";
+       
+       chrome.runtime.sendMessage({
+         type: "BLE_AUTH_POPUP_RESULT",
+         requestId: rid,
+         retry: true
+       });
+       
+       setTimeout(() => window.close(), 1000);
+     } catch (e: any) {
+       stat.textContent = e.message || "Failed to select device.";
+       if (e.message?.includes("User cancelled")) {
+         chrome.runtime.sendMessage({
+           type: "BLE_AUTH_POPUP_RESULT",
+           requestId: rid,
+           outcome: "denied"
+         });
+         setTimeout(() => window.close(), 1000);
+       }
+     }
+  });
+}
+
+authMethodSelect.addEventListener("change", async () => {
+  await ExtensionStorage.saveAuthMethod(authMethodSelect.value as "wifi" | "bluetooth");
+});
+
+// Sync initial values from storage
+ExtensionStorage.getLastHost().then((v) => { if (v) hostInput.value = v; });
+ExtensionStorage.getAuthMethod().then((v) => { if (v) authMethodSelect.value = v; });
+
+refreshStatus();
