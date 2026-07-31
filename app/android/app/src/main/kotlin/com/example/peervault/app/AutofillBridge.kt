@@ -51,7 +51,7 @@ object AutofillBridge {
         val deferred = CompletableDeferred<Unit>()
         readyDeferred = deferred
 
-        val loader = FlutterLoader()
+        val loader = io.flutter.FlutterInjector.instance().flutterLoader()
         loader.startInitialization(context.applicationContext)
         loader.ensureInitializationCompleteAsync(
             context.applicationContext,
@@ -61,9 +61,6 @@ object AutofillBridge {
             try {
                 val newEngine = FlutterEngine(context.applicationContext)
                 GeneratedPluginRegistrant.registerWith(newEngine)
-
-                val entrypoint = DartExecutor.DartEntrypoint(loader.findAppBundlePath(), DART_ENTRYPOINT)
-                newEngine.dartExecutor.executeDartEntrypoint(entrypoint)
 
                 val methodChannel = MethodChannel(newEngine.dartExecutor.binaryMessenger, CHANNEL_NAME)
                 methodChannel.setMethodCallHandler { call, result ->
@@ -82,6 +79,11 @@ object AutofillBridge {
                         else -> result.notImplemented()
                     }
                 }
+
+                val entrypoint = DartExecutor.DartEntrypoint(loader.findAppBundlePath(), DART_ENTRYPOINT)
+                android.util.Log.e("PeerVault", "Calling executeDartEntrypoint...")
+                newEngine.dartExecutor.executeDartEntrypoint(entrypoint)
+                android.util.Log.e("PeerVault", "executeDartEntrypoint completed!")
             } catch (e: Exception) {
                 if (!deferred.isCompleted) deferred.completeExceptionally(e)
             }

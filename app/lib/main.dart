@@ -24,6 +24,11 @@ import 'core/sync/lan_sync_service.dart';
 import 'features/unlock/setup_screen.dart';
 import 'features/unlock/unlock_screen.dart';
 
+@pragma('vm:entry-point')
+void autofillMain() {
+  setupAutofillEntryPoint();
+}
+
 /// Lets a non-widget class (LanSyncService) pop a dialog on top of whatever
 /// screen is currently showing, even though it has no BuildContext of its
 /// own — this is what makes "phone approval" for the browser extension

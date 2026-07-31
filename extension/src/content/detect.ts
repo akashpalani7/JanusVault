@@ -31,20 +31,32 @@ function queryAllInputs(root: Document | ShadowRoot | Element = document): HTMLI
   return inputs;
 }
 
+function isVisible(el: HTMLElement): boolean {
+  if (el.offsetWidth === 0 || el.offsetHeight === 0) return false;
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.opacity === "0") {
+    return false;
+  }
+  const rect = el.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return false;
+  if (rect.left < -9000 || rect.top < -9000) return false;
+  return true;
+}
+
 function findCandidateFields(root: ParentNode = document): FoundField[] {
   const found: FoundField[] = [];
   const inputs = queryAllInputs(root as Element);
   
   let firstPasswordIndex = -1;
   inputs.forEach((input, index) => {
-    if (input.type === "password" && !input.hidden && input.style.display !== 'none') {
+    if (input.type === "password" && !input.hidden && isVisible(input)) {
       found.push({ input, kind: "password" });
       if (firstPasswordIndex === -1) firstPasswordIndex = index;
     }
   });
 
   inputs.forEach((input, index) => {
-    if (input.type === "password" || input.hidden || input.style.display === 'none') {
+    if (input.type === "password" || input.hidden || !isVisible(input)) {
       return;
     }
     
@@ -104,10 +116,13 @@ function makeFloatingEl(anchorInput: HTMLInputElement | null, offsetTop = -32): 
  * script's own JS beyond what fillCredential() writes straight into the
  * page's own input elements.
  */
-async function offerAutofill() {
+async function checkAndShowOverlays() {
   const fields = findCandidateFields();
-  const passwordField = fields.find((f) => f.kind === "password");
-  if (!passwordField || document.getElementById("peervault-autofill-chip")) return;
+  const passwordFields = fields.filter((f) => f.kind === "password");
+  if (!passwordFields.length) return;
+
+  const passwordField = passwordFields[0];
+  if (document.getElementById("peervault-autofill-chip") || document.getElementById("peervault-suggest-chip")) return;
 
   let response: any;
   try {
@@ -116,7 +131,23 @@ async function offerAutofill() {
     return; // Usually happens during Extension Development hard-reloads
   }
   const entries = (response?.entries ?? []) as MatchEntry[];
-  if (response?.locked || !entries.length) return;
+  
+  if (!response?.locked && entries.length > 0) {
+    offerAutofill(passwordField, entries);
+  } else {
+    offerNewPasswordSuggestion(passwordFields);
+  }
+}
+
+/**
+ * Shows the "Fill from PeerVault" chip. Only carries non-secret metadata
+ * (uuid/website/username) — clicking it asks the background script to run
+ * the actual autofill, which ALWAYS requires phone approval first. No
+ * plaintext password is ever visible to, or handled by, this content
+ * script's own JS beyond what fillCredential() writes straight into the
+ * page's own input elements.
+ */
+function offerAutofill(passwordField: FoundField, entries: MatchEntry[]) {
 
   const chip = makeFloatingEl(passwordField.input);
   chip.id = "peervault-autofill-chip";
@@ -192,21 +223,6 @@ async function offerAutofill() {
   setTimeout(() => chip.remove(), 15000);
 }
 
-// ---------------------------------------------------------------------
-// New-password suggestion (signup / change-password forms)
-// ---------------------------------------------------------------------
-
-function isLikelyNewPasswordContext(passwordFields: FoundField[], root: ParentNode): boolean {
-  if (passwordFields.length >= 2) return true; // password + confirm
-  const field = passwordFields[0]?.input;
-  if (!field) return false;
-  if (field.autocomplete === "new-password") return true;
-  const hints = `${field.name} ${field.id} ${field.placeholder}`.toLowerCase();
-  if (hints.includes("new") || hints.includes("confirm") || hints.includes("repeat") || hints.includes("create")) return true;
-  const rootText = root instanceof HTMLFormElement ? root.textContent?.toLowerCase() ?? "" : "";
-  return rootText.includes("sign up") || rootText.includes("create account") || rootText.includes("register");
-}
-
 /** Rejection-sampled so every character in the set is equally likely —
  * plain `randomByte % charset.length` would bias toward earlier
  * characters whenever charset.length doesn't evenly divide 256. */
@@ -222,11 +238,8 @@ function generateStrongPassword(length: number): string {
   return result;
 }
 
-function offerNewPasswordSuggestion() {
-  const fields = findCandidateFields();
-  const passwordFields = fields.filter((f) => f.kind === "password");
+function offerNewPasswordSuggestion(passwordFields: FoundField[]) {
   if (!passwordFields.length) return;
-  if (!isLikelyNewPasswordContext(passwordFields, passwordFields[0].input.form ?? document)) return;
   if (document.getElementById("peervault-suggest-chip")) return;
 
   const chip = makeFloatingEl(passwordFields[0].input);
@@ -469,8 +482,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-offerAutofill();
-offerNewPasswordSuggestion();
+checkAndShowOverlays();
 watchForCredentialSubmission();
 
 // Re-check when the page's DOM changes significantly (SPA login modals
@@ -484,8 +496,7 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 const observer = new MutationObserver(() => {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
-    offerAutofill();
-    offerNewPasswordSuggestion();
+    checkAndShowOverlays();
   }, 400);
 });
 observer.observe(document.body, { childList: true, subtree: true });

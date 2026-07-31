@@ -54,6 +54,7 @@ const importStatus = document.getElementById("importStatus") as HTMLParagraphEle
 const showAddEntryButton = document.getElementById("showAddEntryButton") as HTMLButtonElement;
 const addEntrySection = document.getElementById("addEntrySection") as HTMLElement;
 const newWebsiteInput = document.getElementById("newWebsiteInput") as HTMLInputElement;
+const newWebsiteUrlInput = document.getElementById("newWebsiteUrlInput") as HTMLInputElement;
 const newUsernameInput = document.getElementById("newUsernameInput") as HTMLInputElement;
 const newPasswordInput = document.getElementById("newPasswordInput") as HTMLInputElement;
 const newPasswordLengthSlider = document.getElementById("newPasswordLengthSlider") as HTMLInputElement;
@@ -227,7 +228,8 @@ async function handleEdit(entry: EntryMeta, button: HTMLButtonElement) {
       
       entryEditorTitle.textContent = "Edit entry";
       editUuid = entry.uuid;
-      newWebsiteInput.value = entry.websiteName || entry.websiteUrl || "";
+      newWebsiteInput.value = entry.websiteName || "";
+      newWebsiteUrlInput.value = entry.websiteUrl || "";
       newUsernameInput.value = entry.username || "";
       newPasswordInput.value = response.password as string;
       addEntryStatus.textContent = "";
@@ -566,6 +568,7 @@ showAddEntryButton.addEventListener("click", () => {
   entryEditorTitle.textContent = "New entry";
   editUuid = null;
   newWebsiteInput.value = "";
+  newWebsiteUrlInput.value = "";
   newUsernameInput.value = "";
   addEntryStatus.textContent = "";
   refreshGeneratedPassword();
@@ -579,17 +582,18 @@ cancelAddEntryButton.addEventListener("click", () => {
 });
 
 saveNewEntryButton.addEventListener("click", async () => {
-  const domain = newWebsiteInput.value.trim();
+  const websiteName = newWebsiteInput.value.trim();
+  const websiteUrl = newWebsiteUrlInput.value.trim();
   const username = newUsernameInput.value.trim();
   const password = newPasswordInput.value;
-  if (!domain || !password) {
-    addEntryStatus.textContent = "Website and password are required.";
+  if (!websiteUrl || !password) {
+    addEntryStatus.textContent = "Website URL and password are required.";
     return;
   }
   saveNewEntryButton.disabled = true;
   try {
     const targetType = editUuid ? "UPDATE_CREDENTIAL" : "CAPTURE_CREDENTIAL";
-    const payload = editUuid ? { type: targetType, uuid: editUuid, domain, username, password } : { type: targetType, domain, username, password };
+    const payload = editUuid ? { type: targetType, uuid: editUuid, websiteName, websiteUrl, username, password } : { type: targetType, websiteName, websiteUrl, username, password };
     
     const response = await chrome.runtime.sendMessage(payload);
     if (response?.saved) {

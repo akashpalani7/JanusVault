@@ -40,6 +40,10 @@ class PeerVaultSyncForegroundService : Service() {
         scope.launch {
             try {
                 AutofillBridge.startSyncListening(applicationContext, deviceName())
+                
+                // Auto turn off listening in 120 seconds to prevent battery drain
+                kotlinx.coroutines.delay(120_000L)
+                stopSelf()
             } catch (_: Exception) {
                 // Couldn't start (e.g. vault not set up on this device yet) —
                 // stop ourselves rather than sit in the foreground doing nothing.

@@ -186,8 +186,8 @@ class VaultDatabase {
     return File('${dir.path}/peervault_db.json');
   }
 
-  Future<void> load() async {
-    if (_loaded) return;
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force) return;
     _loaded = true;
     final file = await _file();
     if (!await file.exists()) return;

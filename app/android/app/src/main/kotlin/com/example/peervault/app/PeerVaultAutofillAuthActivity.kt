@@ -29,14 +29,16 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
 
     companion object {
         const val EXTRA_QUERY = "peervault.extra.query"
+        const val EXTRA_USERNAME_ID = "peervault.extra.username_id"
+        const val EXTRA_PASSWORD_ID = "peervault.extra.password_id"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val query = intent.getStringExtra(EXTRA_QUERY) ?: ""
-        val structure = intent.getParcelableExtra<android.app.assist.AssistStructure>(AutofillManager.EXTRA_ASSIST_STRUCTURE)
-        val fields = structure?.let { FieldFinder.find(it) }
+        val usernameId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_USERNAME_ID)
+        val passwordId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_PASSWORD_ID)
 
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(
@@ -44,7 +46,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    scope.launch { completeAfterAuth(query, fields) }
+                    scope.launch { completeAfterAuth(query, usernameId, passwordId) }
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -70,9 +72,15 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         prompt.authenticate(promptInfo)
     }
 
-    private suspend fun completeAfterAuth(query: String, fields: FieldFinder.Fields?) {
+    private suspend fun completeAfterAuth(query: String, usernameId: android.view.autofill.AutofillId?, passwordId: android.view.autofill.AutofillId?) {
         val unlocked = AutofillBridge.unlockVault(applicationContext)
-        if (!unlocked || fields == null) {
+        
+        if (intent.getBooleanExtra("notify_only", false)) {
+            finish()
+            return
+        }
+
+        if (!unlocked || (usernameId == null && passwordId == null)) {
             setResult(RESULT_CANCELED)
             finish()
             return
@@ -87,22 +95,69 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             return
         }
 
-        // Simplest correct behaviour: return the first match. A fuller
-        // implementation would show an in-activity picker when there are
-        // multiple accounts for the same site (the architecture doc calls
-        // this out explicitly — every account has its own UUID).
-        val entry = entries.getJSONObject(0)
-        val builder = Dataset.Builder()
-        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
-            setTextViewText(android.R.id.text1, entry.getString("websiteName"))
-            setTextViewText(android.R.id.text2, entry.getString("username"))
+        val responseBuilder = android.service.autofill.FillResponse.Builder()
+        val inlineSpecs = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            intent.getParcelableArrayListExtra<android.widget.inline.InlinePresentationSpec>("inline_specs")
+        } else null
+        val useInline = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && !inlineSpecs.isNullOrEmpty()
+        
+        for (i in 0 until entries.length()) {
+            val entry = entries.getJSONObject(i)
+            val builder = Dataset.Builder()
+            
+            val websiteName = entry.optString("websiteName", "")
+            val websiteUrl = entry.optString("websiteUrl", "")
+            val title = if (websiteName.isNotBlank()) websiteName else if (websiteUrl.isNotBlank()) websiteUrl else "PeerVault Account"
+            val username = entry.optString("username", "")
+            val password = entry.optString("password", "")
+            
+            if (password.isBlank()) continue
+            
+            val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
+                setTextViewText(android.R.id.text1, title)
+                setTextViewText(android.R.id.text2, username)
+            }
+            
+            if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                // Determine the correct spec index to use
+                val spec = inlineSpecs!![minOf(i, inlineSpecs.size - 1)]
+                val dummyIntent = android.app.PendingIntent.getBroadcast(
+                    applicationContext, 
+                    3000 + i, 
+                    Intent(), 
+                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                val inlinePresentation = buildInlinePresentation(spec, title, username, dummyIntent)
+                
+                usernameId?.let { builder.setValue(it, AutofillValue.forText(username), presentation, inlinePresentation) }
+                passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation, inlinePresentation) }
+            } else {
+                usernameId?.let { builder.setValue(it, AutofillValue.forText(username), presentation) }
+                passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation) }
+            }
+            responseBuilder.addDataset(builder.build())
         }
-        fields.usernameId?.let { builder.setValue(it, AutofillValue.forText(entry.getString("username")), presentation) }
-        fields.passwordId?.let { builder.setValue(it, AutofillValue.forText(entry.getString("password")), presentation) }
 
         val resultIntent = Intent()
-        resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, builder.build())
+        resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, responseBuilder.build())
         setResult(RESULT_OK, resultIntent)
         finish()
+    }
+
+    @androidx.annotation.RequiresApi(android.os.Build.VERSION_CODES.R)
+    private fun buildInlinePresentation(
+        spec: android.widget.inline.InlinePresentationSpec,
+        title: String,
+        subtitle: String,
+        pendingIntent: android.app.PendingIntent,
+    ): android.service.autofill.InlinePresentation {
+        val slice = androidx.autofill.inline.v1.InlineSuggestionUi.newContentBuilder(pendingIntent)
+            .setTitle(title)
+            .setSubtitle(subtitle)
+            .setStartIcon(android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_lock_lock))
+            .build()
+            .slice
+
+        return android.service.autofill.InlinePresentation(slice, spec, /* pinned= */ false)
     }
 }

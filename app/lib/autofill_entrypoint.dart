@@ -28,23 +28,29 @@ import 'core/vault/vault_session.dart';
 
 const MethodChannel _channel = MethodChannel('com.peervault.app/autofill');
 
-@pragma('vm:entry-point')
-void autofillMain() {
+void setupAutofillEntryPoint() {
+  print('==== autofillMain STARTED ====');
   WidgetsFlutterBinding.ensureInitialized();
+  print('==== WidgetsFlutterBinding initialized ====');
   _channel.setMethodCallHandler(_handleCall);
   _initializeThenSignalReady();
 }
 
-/// Previously this isolate signalled "ready" to native immediately, before
-/// ever loading the vault database — every single autofill request would
-/// then see an empty/uninitialized VaultDatabase and report "locked" or
-/// find zero entries, regardless of the vault's real state. This is a
-/// distinct, separate FlutterEngine/isolate from the main app's, so it
-/// must load its own copy of the database; it can't rely on main.dart's
-/// `await VaultDatabase.instance.load()` having already happened.
 Future<void> _initializeThenSignalReady() async {
-  await VaultDatabase.instance.load();
-  await _channel.invokeMethod('ready');
+  print('==== _initializeThenSignalReady STARTED ====');
+  try {
+    await VaultDatabase.instance.load();
+    print('Autofill isolate: VaultDatabase loaded');
+  } catch (e, stack) {
+    print('Autofill isolate: VaultDatabase failed to load - $e\n$stack');
+  }
+  print('==== sending ready to channel ====');
+  try {
+    await _channel.invokeMethod('ready');
+    print('==== ready sent ====');
+  } catch (e, stack) {
+    print('==== failed to send ready - $e\n$stack ====');
+  }
 }
 
 Future<dynamic> _handleCall(MethodCall call) async {
@@ -81,6 +87,7 @@ Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
   if (!VaultSession.instance.isUnlocked) {
     return jsonEncode({'locked': true, 'entries': <dynamic>[]});
   }
+  await VaultDatabase.instance.load(force: true);
   final all = await VaultRepository.instance.getAllEntries();
   // Package-name style fallback (e.g. "com.instagram.android" -> "instagram
   // android") — only useful when `query` isn't already a real domain.

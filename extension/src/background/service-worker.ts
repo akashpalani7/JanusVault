@@ -255,13 +255,20 @@ async function findMatchesForDomain(domain: string) {
 
   const all = await ExtensionStorage.getAllEntries();
   const normalizedDomain = domain.replace(/^www\./, "").toLowerCase();
+  const tokenizedDomain = normalizedDomain.replace(/\./g, " ").replace(/ com /g, " ").trim();
+  const domainTokens = tokenizedDomain.split(" ").filter(t => t.length > 0);
+  
   const matches: unknown[] = [];
   for (const record of all) {
     if (record.deleted) continue;
     const decrypted = await decryptRecord(record);
     if (!decrypted) continue;
     const haystack = `${decrypted.websiteName} ${decrypted.websiteUrl}`.toLowerCase();
-    if (haystack.includes(normalizedDomain)) {
+    
+    // Match either the full domain, the tokenized domain ("leetcode com"), or any individual meaningful part
+    if (haystack.includes(normalizedDomain) || 
+        haystack.includes(tokenizedDomain) || 
+        domainTokens.some(t => haystack.includes(t))) {
       matches.push({ uuid: decrypted.uuid, websiteName: decrypted.websiteName, username: decrypted.username });
     }
   }
@@ -328,14 +335,14 @@ async function autofillIntoTab(uuid: string, tabId?: number) {
  * only ever runs after the user explicitly clicked "Save" on the on-page
  * confirmation banner (see content/detect.ts); nothing is ever saved
  * silently on form submit. */
-async function captureCredential(domain: string, username: string, password: string) {
+async function captureCredential(websiteName: string, websiteUrl: string, username: string, password: string) {
   const vek = await getVek();
   if (!vek) return { saved: false, reason: "locked" };
 
   const now = new Date().toISOString();
   const uuid = crypto.randomUUID();
-  const encryptedWebsiteName = await encryptString(domain, vek);
-  const encryptedWebsiteUrl = await encryptString(domain, vek);
+  const encryptedWebsiteName = await encryptString(websiteName, vek);
+  const encryptedWebsiteUrl = await encryptString(websiteUrl, vek);
   const encryptedUsername = await encryptString(username, vek);
   const encryptedPassword = await encryptString(password, vek);
 
@@ -358,7 +365,7 @@ async function captureCredential(domain: string, username: string, password: str
 }
 
 /** Updates a previously saved credential, preserving its UUID and creation timestamp. */
-async function updateCredential(uuid: string, domain: string, username: string, password: string) {
+async function updateCredential(uuid: string, websiteName: string, websiteUrl: string, username: string, password: string) {
   const vek = await getVek();
   if (!vek) return { saved: false, reason: "locked" };
 
@@ -367,8 +374,8 @@ async function updateCredential(uuid: string, domain: string, username: string, 
   if (!existing) return { saved: false, reason: "not_found" };
 
   const now = new Date().toISOString();
-  const encryptedWebsiteName = await encryptString(domain, vek);
-  const encryptedWebsiteUrl = await encryptString(domain, vek);
+  const encryptedWebsiteName = await encryptString(websiteName, vek);
+  const encryptedWebsiteUrl = await encryptString(websiteUrl, vek);
   const encryptedUsername = await encryptString(username, vek);
   const encryptedPassword = await encryptString(password, vek);
 
@@ -513,10 +520,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       }
       case "CAPTURE_CREDENTIAL":
-        sendResponse(await captureCredential(message.domain, message.username, message.password));
+        sendResponse(await captureCredential(message.websiteName || message.domain, message.websiteUrl || message.domain, message.username, message.password));
         break;
       case "UPDATE_CREDENTIAL":
-        sendResponse(await updateCredential(message.uuid, message.domain, message.username, message.password));
+        sendResponse(await updateCredential(message.uuid, message.websiteName, message.websiteUrl, message.username, message.password));
         break;
       case "IS_UNLOCKED":
         sendResponse({ unlocked: (await getVek()) !== null });
