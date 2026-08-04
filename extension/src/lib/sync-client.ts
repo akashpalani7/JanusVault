@@ -55,130 +55,17 @@ export async function syncWithPhone(host: string, port: number, vek: CryptoKey):
 }
 
 export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Promise<{ pulled: number; pushed: number }> {
-  const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-  const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
-  const EOM_MARKER = '\x04';
-
-  let device: any;
-  if (!forcePrompt) {
-    try {
-      const devices = await (navigator as any).bluetooth.getDevices();
-      device = devices.find((d: any) => !!d.id);
-    } catch (e) {}
-  }
-
-  if (!device) {
-    device = await (navigator as any).bluetooth.requestDevice({
-      filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+    const vekRaw = Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", vek)));
+    const response = await chrome.runtime.sendMessage({
+        type: 'TRIGGER_BLE_SYNC',
+        vekRaw,
+        forcePrompt,
     });
-  }
-
-  let server: any;
-  let char: any;
-  let aborted = false;
-
-  await new Promise<void>(async (resolveConnection, rejectConnection) => {
-    const connectionTimeout = setTimeout(() => {
-      aborted = true;
-      if (server?.connected) { try { server.disconnect(); } catch{} }
-      rejectConnection(new Error("Connection timed out. The phone is unreachable or not responding."));
-    }, 20000);
-
-    // Removed watchAdvertisements logic because Windows Chrome regularly swallows
-    // advertisement events, causing a 5-second timeout even when the device is nearby
-    // and fully connectable via GATT.
-
-    for (let i = 0; i < 4; i++) {
-      try {
-        server = await device.gatt.connect();
-        if (aborted) return;
-        await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
-        if (aborted) return;
-        const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
-        if (aborted) return;
-        char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
-        if (aborted) return;
-        break; // Connected and services found
-      } catch (e) {
-        if (aborted) return;
-        if (i === 3) {
-          clearTimeout(connectionTimeout);
-          return rejectConnection(e);
-        }
-        console.warn(`GATT dropped during sync, retrying in 1s... (${i+1}/4)`);
-        if (server?.connected) try { server.disconnect(); } catch{}
-        await new Promise(r => setTimeout(r, 1000));
-        if (aborted) return;
-      }
-    }
-    
-    clearTimeout(connectionTimeout);
-    resolveConnection();
-  });
-
-  if (aborted || !char) throw new Error("GATT connection aborted.");
-  
-  await char.startNotifications();
-  await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time to prepare for instantaneous responses
-
-  return new Promise((resolve, reject) => {
-    let inboundBuffer = "";
-    let closing = false;
-    
-    const transport: SyncTransport = {
-      send: async (msg) => {
-        const encoder = new TextEncoder();
-        const bytes = encoder.encode(msg + EOM_MARKER);
-        const chunkSize = 480;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          await char.writeValue(bytes.slice(i, i + chunkSize));
-        }
-      },
-      close: () => {
-        if (closing) return;
-        closing = true;
-        if (server.connected) {
-          try { server.disconnect(); } catch {}
-        }
-      },
-      onMessage: null,
-      onError: null,
-    };
-
-    char.addEventListener('characteristicvaluechanged', (event: any) => {
-      const dataView = event.target.value; // DataView
-      const text = new TextDecoder().decode(dataView);
-      console.log(`[Ext/BLE Sync] Received chunk len=${text.length}`);
-
-      inboundBuffer += text;
-
-      while (inboundBuffer.includes(EOM_MARKER)) {
-        const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
-        const fullMessage = inboundBuffer.substring(0, eomIdx);
-        inboundBuffer = inboundBuffer.substring(eomIdx + 1);
-        console.log(`[Ext/BLE Sync] Complete message assembled (type extraction pending)`);
-
-        try {
-          const message = JSON.parse(fullMessage) as SyncMessage;
-          transport.onMessage?.(fullMessage);
-        } catch (e) {
-          console.error("Failed to parse BLE message", e);
-        }
-      }
-    });
-
-    device.addEventListener('gattserverdisconnected', () => {
-      if (closing) return; // Ignore disconnect events if we intentionally closed
-      const err = new Error("BLE connection unexpectedly disconnected");
-      if (transport.onError) transport.onError(err);
-      else reject(err);
-    });
-
-    runSyncProtocol(transport, vek, resolve, reject);
-  });
+    if (!response?.ok) throw new Error(response?.error || 'BLE sync failed');
+    return { pulled: response.pulled, pushed: response.pushed };
 }
 
-async function runSyncProtocol(
+export async function runSyncProtocol(
   transport: SyncTransport,
   vek: CryptoKey,
   resolve: (res: { pulled: number; pushed: number }) => void,
@@ -323,14 +210,13 @@ async function runSyncProtocol(
   
   const ping = () => {
     if (handshakeConfirmed) return;
-    try { transport.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage)); } catch {}
+    try { 
+      const promise = transport.send(JSON.stringify({ type: "hello", payload: { nonce: sentNonceBase64 } } satisfies SyncMessage)); 
+      if (promise && promise.catch) promise.catch(() => {});
+    } catch {}
   };
   
   ping();
-  setTimeout(ping, 300);
-  setTimeout(ping, 1000);
-  setTimeout(ping, 2500);
-  setTimeout(ping, 5000);
 }
 
 /** Recomputes a record's sync hash after a local edit/capture, using the

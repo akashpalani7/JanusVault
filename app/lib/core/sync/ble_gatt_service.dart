@@ -57,6 +57,7 @@ class BleGattService {
 
   /// The active connection handler (one connection at a time for BLE).
   SyncConnectionHandler? _handler;
+  String? _activeDeviceId;
 
   // -------------------------------------------------------------------
   //  Start / stop GATT advertising
@@ -100,6 +101,16 @@ class BleGattService {
       // Listen for incoming writes on the sync characteristic
       BlePeripheral.setWriteRequestCallback(_onWriteRequest);
       BlePeripheral.setReadRequestCallback(_onReadRequest);
+      BlePeripheral.setConnectionStateChangeCallback(
+          (String deviceId, bool connected) {
+        print('BleGattService: Device $deviceId connected=$connected');
+        if (!connected) {
+          _handler = null;
+          _incomingBuffer.clear();
+          _activeDeviceId = null;
+          print('BleGattService: Cleaned up after disconnect');
+        }
+      });
 
       // Start advertising
       await BlePeripheral.startAdvertising(
@@ -132,6 +143,7 @@ class BleGattService {
     _isAdvertising = false;
     _handler = null;
     _incomingBuffer.clear();
+    _activeDeviceId = null;
     print('BleGattService: Advertising stopped');
   }
 
@@ -144,7 +156,14 @@ class BleGattService {
   /// until we see the EOM marker, then process the complete JSON message.
   WriteRequestResult? _onWriteRequest(
       String deviceId, String characteristicId, int offset, Uint8List? value) {
-    if (value == null || value.isEmpty) return null;
+    if (_activeDeviceId != null && _activeDeviceId != deviceId) {
+      print(
+          'BleGattService: Rejecting write from unexpected device $deviceId (active: $_activeDeviceId)');
+      return WriteRequestResult(status: 0);
+    }
+    _activeDeviceId ??= deviceId;
+
+    if (value == null || value.isEmpty) return WriteRequestResult(status: 0);
 
     final chunk = utf8.decode(value, allowMalformed: true);
     print(
@@ -168,7 +187,7 @@ class BleGattService {
         }
       }
     }
-    return null; // Acknowledge successfully
+    return WriteRequestResult(status: 0); // GATT_SUCCESS
   }
 
   ReadRequestResult? _onReadRequest(
@@ -222,8 +241,10 @@ class BleGattService {
 
   /// Sends a message to the connected central by notifying on the sync
   /// characteristic. Large messages are automatically chunked.
-  static Future<void> _sendChunkedNotification(String deviceId, String jsonMessage) async {
-    print('BleGattService: _sendChunkedNotification (len=${jsonMessage.length})');
+  static Future<void> _sendChunkedNotification(
+      String deviceId, String jsonMessage) async {
+    print(
+        'BleGattService: _sendChunkedNotification (len=${jsonMessage.length})');
     final data = '$jsonMessage$kEomMarker';
     final bytes = utf8.encode(data);
 
@@ -233,16 +254,18 @@ class BleGattService {
           : offset + kBleChunkSize;
       final chunk = Uint8List.fromList(bytes.sublist(offset, end));
       try {
-        print('BleGattService: Instructing native plugin to notify chunk len=${chunk.length} to deviceId=$deviceId');
+        print(
+            'BleGattService: Instructing native plugin to notify chunk len=${chunk.length} to deviceId=$deviceId');
         BlePeripheral.updateCharacteristic(
           characteristicId: kSyncCharacteristicUuid,
           value: chunk,
           deviceId: deviceId, // restore deviceId targeting
         );
-        print('BleGattService: updateCharacteristic returned successfully for chunk');
-        
+        print(
+            'BleGattService: updateCharacteristic returned successfully for chunk');
+
         // Critical: Provide generous spacing between Bluetooth notifications.
-        // Windows and certain generic Android adapters will silently discard overlapping 
+        // Windows and certain generic Android adapters will silently discard overlapping
         // synchronous notifications if pushed too quickly inside the same GATT interval.
         await Future.delayed(const Duration(milliseconds: 60));
       } catch (e) {
@@ -259,37 +282,48 @@ class _BleTransport implements SyncTransport {
 
   _BleTransport(this.deviceId);
 
-  static final List<Future<void> Function()> _queue = [];
-  static bool _processing = false;
+  final List<Future<void> Function()> _queue = [];
+  bool _processing = false;
 
   @override
   void send(String jsonMessage) {
-    // We queue writes asynchronously to guarantee they space out. 
-    // Synchronous calls to the Flutter bridge will instantly collide in the OS radio 
+    // We queue writes asynchronously to guarantee they space out.
+    // Synchronous calls to the Flutter bridge will instantly collide in the OS radio
     // and drop the notification packets entirely.
-    _queue.add(() => BleGattService._sendChunkedNotification(deviceId, jsonMessage));
+    _queue.add(() async {
+      // Fast-bounce delay: Windows GATT stack often drops incoming notifications
+      // if they arrive within ~100ms of a successful Write operation finishing.
+      // E.g. PC Writes pairingRequest -> Flutter gets it -> Flutter Notifies instantly -> 
+      // PC drops it because its GATT client is still resolving the Write ACK.
+      await Future.delayed(const Duration(milliseconds: 250));
+      await BleGattService._sendChunkedNotification(deviceId, jsonMessage);
+    });
     _processQueue();
   }
 
-  static Future<void> _processQueue() async {
+  Future<void> _processQueue() async {
     if (_processing) return;
     _processing = true;
-    while (_queue.isNotEmpty) {
-      final task = _queue.removeAt(0);
-      try {
-        await task();
-      } catch (e) {
-        print('BleGattService: Caught exception in queue task $e');
+    try {
+      while (_queue.isNotEmpty) {
+        final task = _queue.removeAt(0);
+        try {
+          await task();
+        } catch (e) {
+          print('BleGattService: Caught exception in queue task $e');
+        }
       }
+    } finally {
+      _processing = false;
     }
-    _processing = false;
   }
 
   @override
   Future<void> close() async {
-    // BLE connection lifecycle is managed externally by the central device.
-    // The peripheral's job is passive in GATT. No action on this end is required.
+    _queue.clear();
+    _processing = false;
     BleGattService.instance._handler = null;
     BleGattService.instance._incomingBuffer.clear();
+    BleGattService.instance._activeDeviceId = null;
   }
 }

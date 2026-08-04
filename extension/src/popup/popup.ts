@@ -264,61 +264,22 @@ syncButton.addEventListener("click", async () => {
 });
 
 syncBleButton.addEventListener("click", async () => {
-  let paired = false;
-  try {
-    const devices = await (navigator as any).bluetooth.getDevices();
-    paired = !!devices.find((d: any) => !!d.id);
-  } catch (e) {}
-
-  const urlParams = new URLSearchParams(window.location.search);
-  const isPopout = urlParams.has("popout");
-  const forcePrompt = urlParams.get("forcePrompt") === "true";
-
-  if (!paired && !isPopout) {
-    chrome.windows.create({
-      url: chrome.runtime.getURL("popup/popup.html?popout=sync"),
-      type: "normal", 
-      width: 450,
-      height: 650,
-      focused: true
-    });
-    window.close(); 
-    return;
-  }
-
-  syncStatus.textContent = "Requesting Bluetooth connection...";
-  
   const rawKeyBase64 = await ExtensionStorage.getDeviceLocalKeyRaw();
   const wrappedVek = await ExtensionStorage.getWrappedVek();
   if (!rawKeyBase64 || !wrappedVek) {
     syncStatus.textContent = "Error: Not paired.";
     return;
   }
+  
+  syncBleButton.disabled = true;
+  syncStatus.textContent = "Syncing...";
+  
   try {
     const rawKeyBytes = Uint8Array.from(atob(rawKeyBase64), (c) => c.charCodeAt(0));
     const deviceLocalKey = await crypto.subtle.importKey("raw", rawKeyBytes, "AES-GCM", false, ["decrypt"]);
     const vek = await unwrapVek(wrappedVek, deviceLocalKey);
 
-    let response: any;
-    try {
-      response = await syncWithBlePhone(vek, forcePrompt);
-    } catch(e: any) {
-      if (!forcePrompt && !e.message.includes("globally disabled") && !e.message.includes("Bluetooth API is disabled") && !e.message.includes("User cancelled")) {
-         if (!isPopout) {
-           chrome.windows.create({
-             url: chrome.runtime.getURL("popup/popup.html?popout=sync&forcePrompt=true"),
-             type: "normal", width: 450, height: 650, focused: true
-           });
-           window.close();
-           return;
-         } else {
-           response = await syncWithBlePhone(vek, true);
-         }
-      } else {
-         throw e;
-      }
-    }
-
+    const response = await syncWithBlePhone(vek, false);
     syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
     await runSearch(searchInput.value);
   } catch(e) {
@@ -330,6 +291,8 @@ syncBleButton.addEventListener("click", async () => {
     } else {
       syncStatus.textContent = `Bluetooth sync failed: ${msg}`;
     }
+  } finally {
+    syncBleButton.disabled = false;
   }
 });
 
@@ -400,96 +363,48 @@ lanPairButton.addEventListener("click", async () => {
 });
 
 blePairButton.addEventListener("click", async () => {
-  let paired = false;
-  try {
-    const devices = await (navigator as any).bluetooth.getDevices();
-    paired = !!devices.find((d: any) => !!d.id);
-  } catch (e) {}
-
-  const urlParams = new URLSearchParams(window.location.search);
-  const isPopout = urlParams.has("popout");
-  const forcePrompt = urlParams.get("forcePrompt") === "true";
-
-  if (!paired && !isPopout) {
-    chrome.windows.create({
-      url: chrome.runtime.getURL("popup/popup.html?popout=pair"),
-      type: "normal",
-      width: 450,
-      height: 650,
-      focused: true
-    });
-    window.close();
-    return;
-  }
-
   const name = deviceNameInput.value.trim() || "Paired Browser";
 
-  pairStatus.textContent = "Connecting to phone...";
-  blePairButton.textContent = "Connecting...";
+  pairStatus.textContent = "Please select your phone in the popup window...";
   blePairButton.disabled = true;
+  try {
+    const devices = await (navigator as any).bluetooth.getDevices();
+    for (const d of devices) {
+        try { await d.forget(); } catch(e) {}
+    }
+  } catch (e) {}
 
   try {
-    let outcome = await requestBlePairing(name, (pin) => {
-      pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
-    }, forcePrompt);
-
-    if (!outcome.success && !forcePrompt && !outcome.reason.includes("globally disabled") && !outcome.reason.includes("Bluetooth API is disabled") && !outcome.reason.includes("User cancelled")) {
-       if (!isPopout) {
-          chrome.windows.create({
-            url: chrome.runtime.getURL("popup/popup.html?popout=pair&forcePrompt=true"),
-            type: "normal", width: 450, height: 650, focused: true
-          });
-          window.close();
-          return;
-       } else {
-          outcome = await requestBlePairing(name, (pin) => {
-            pairStatus.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:24px;">${pin}</b>`;
-          }, true);
-       }
-    }
-
-    if (!outcome.success) {
-      if (outcome.reason.includes("globally disabled") || outcome.reason.includes("Bluetooth API is disabled")) {
-        pairStatus.innerHTML = `Pairing failed: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
-      } else if (outcome.reason.includes("User cancelled")) {
-        pairStatus.textContent = `Dialog cancelled.`;
-      } else {
-        pairStatus.textContent = `Pairing failed: ${outcome.reason}`;
-      }
-      blePairButton.textContent = "Pair via Bluetooth";
-      blePairButton.disabled = false;
-      return;
-    }
-
-    pairStatus.textContent = "Success! Parsing vault key...";
-    const res = await chrome.runtime.sendMessage({ 
-      type: "COMPLETE_LAN_PAIRING", 
-      wrappedVek: outcome.wrappedVek, 
-      sharedSecretArray: Array.from(outcome.sharedSecret),
-      deviceName: name,
-      peerDevice: outcome.device
+    await new Promise<void>((resolve, reject) => {
+      let isDone = false;
+      const listener = (msg: any) => {
+         if (msg.type === 'BLE_PAIRED') {
+             isDone = true;
+             chrome.runtime.onMessage.removeListener(listener);
+             resolve();
+         }
+      };
+      chrome.runtime.onMessage.addListener(listener);
+      chrome.runtime.sendMessage({ type: "BLE_PAIR_DEVICE" }, (res) => {
+          if (!res?.ok && !isDone) {
+             chrome.runtime.onMessage.removeListener(listener);
+             reject(new Error("Failed to open pairing window"));
+          }
+      });
+      setTimeout(() => {
+          if (!isDone) {
+              chrome.runtime.onMessage.removeListener(listener);
+              reject(new Error("Pairing window closed or timed out."));
+          }
+      }, 60000);
     });
-    
-    if (res?.paired) {
-      pairStatus.textContent = "Paired successfully!";
-      await refreshStatus();
-    } else {
-      pairStatus.textContent = `Pairing failed: ${res?.error ?? "unknown error"}`;
-      blePairButton.textContent = "Pair via Bluetooth";
-      blePairButton.disabled = false;
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("globally disabled") || msg.includes("Bluetooth API is disabled")) {
-      pairStatus.innerHTML = `Error: Web Bluetooth is disabled. Please enable it in <br><b>chrome://flags/#enable-web-bluetooth</b> (or brave://flags).`;
-    } else if (msg.includes("User cancelled")) {
-      pairStatus.textContent = `Dialog cancelled.`;
-    } else {
-      pairStatus.textContent = `Error: ${msg}`;
-    }
-    blePairButton.textContent = "Pair via Bluetooth";
+  } catch(e) {
+    pairStatus.textContent = (e as Error).message.includes("timed out") ? "Pairing cancelled." : "Pairing failed.";
     blePairButton.disabled = false;
+    return;
   }
+  pairStatus.textContent = "Paired and synced successfully!";
+  await refreshStatus();
 });
 
 generatePairingButton.addEventListener("click", async () => {
@@ -718,7 +633,68 @@ importFileInput.addEventListener("change", async () => {
 // URL Param overrides (for normal window popout flow)
 // ---------------------------------------------------------------------
 const urlParamsExt = new URLSearchParams(window.location.search);
-if (urlParamsExt.get("popout") === "sync") {
+if (urlParamsExt.get("mode") === "ble-pair") {
+    document.body.innerHTML = `
+        <div style="text-align:center; padding:24px; font-family: sans-serif;">
+            <h3 style="margin-top:0; font-size:18px;">Pair PeerVault via Bluetooth</h3>
+            <p style="font-size:14px; margin-bottom:24px; color:#555;">Click below and select your phone from the list.</p>
+            <button id="blePairDialogBtn" style="padding:12px 24px; font-size:16px; background:#4b4bff; color:white; border:none; border-radius:6px; cursor:pointer; width:100%;">
+                Select Device
+            </button>
+            <p id="blePairDialogStatus" style="margin-top: 10px; font-size: 14px; font-weight: bold;"></p>
+        </div>
+    `;
+
+    document.getElementById("blePairDialogBtn")!.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("blePairDialogBtn") as HTMLButtonElement;
+        const status = document.getElementById("blePairDialogStatus") as HTMLParagraphElement;
+        btn.disabled = true;
+        try {
+            status.textContent = "Please select your device in the browser prompt...";
+            const urlParams = new URLSearchParams(window.location.search);
+            const name = urlParams.get("name") || "Paired Browser";
+            
+            // Strictly calling it inside this window context
+            const outcome = await requestBlePairing(name, (pin) => {
+                status.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:32px;">${pin}</b>`;
+                btn.textContent = "Awaiting Phone...";
+            }, true, (msg) => {
+                status.innerText = `[BLE Log]: ${msg}`;
+            }); // forcePrompt = true so it strictly runs requestDevice() inside pairing-client
+
+            if (!outcome.success) {
+                status.textContent = `Pairing failed: ${outcome.reason}`;
+                btn.disabled = false;
+                btn.textContent = "Try Again";
+                return;
+            }
+            
+            status.textContent = "Success! Parsing vault key...";
+            const res = await chrome.runtime.sendMessage({ 
+                type: "COMPLETE_LAN_PAIRING", 
+                wrappedVek: outcome.wrappedVek, 
+                sharedSecretArray: Array.from(outcome.sharedSecret),
+                deviceName: name,
+                peerDevice: outcome.device
+            });
+            
+            if (res?.paired) {
+                status.textContent = "Paired successfully! You can close this.";
+                chrome.runtime.sendMessage({ type: "BLE_PAIRED" });
+                setTimeout(() => window.close(), 1500);
+            } else {
+                status.textContent = `Pairing failed: ${res?.error ?? "unknown error"}`;
+                btn.disabled = false;
+                btn.textContent = "Try Again";
+            }
+        } catch (err: any) {
+            status.textContent = `Error: ${err.message}`;
+            btn.disabled = false;
+            btn.textContent = "Select Device";
+        }
+    });
+} else if (urlParamsExt.get("popout") === "sync") {
   syncStatus.textContent = "Please click 'Sync via Bluetooth' again to authorize.";
 } else if (urlParamsExt.get("popout") === "pair") {
   pairStatus.textContent = "Please click 'Pair via Bluetooth' again to authorize.";

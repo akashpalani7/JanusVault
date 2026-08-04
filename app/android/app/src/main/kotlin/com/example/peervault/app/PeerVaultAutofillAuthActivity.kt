@@ -73,6 +73,9 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
     }
 
     private suspend fun completeAfterAuth(query: String, usernameId: android.view.autofill.AutofillId?, passwordId: android.view.autofill.AutofillId?) {
+        val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        manager.cancel(4001)
+
         val unlocked = AutofillBridge.unlockVault(applicationContext)
         
         if (intent.getBooleanExtra("notify_only", false)) {
@@ -121,7 +124,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                 // Determine the correct spec index to use
                 val spec = inlineSpecs!![minOf(i, inlineSpecs.size - 1)]
-                val dummyIntent = android.app.PendingIntent.getBroadcast(
+                val dummyIntent = android.app.PendingIntent.getActivity(
                     applicationContext, 
                     3000 + i, 
                     Intent(), 
@@ -152,9 +155,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         pendingIntent: android.app.PendingIntent,
     ): android.service.autofill.InlinePresentation {
         val slice = androidx.autofill.inline.v1.InlineSuggestionUi.newContentBuilder(pendingIntent)
-            .setTitle(title)
-            .setSubtitle(subtitle)
-            .setStartIcon(android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_lock_lock))
+            .setTitle(if (subtitle.isNotEmpty()) "$title | $subtitle" else title)
             .build()
             .slice
 

@@ -83,14 +83,16 @@ export function requestLanPairing(
 export function requestBlePairing(
   deviceName: string,
   onPinReady: (pin: string) => void,
-  forcePrompt: boolean = false
+  forcePrompt: boolean = false,
+  onLog?: (msg: string) => void,
+  preAuthorizedDevice?: any
 ): Promise<PairingOutcome> {
   return new Promise(async (resolve) => {
     const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
     const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
     const EOM_MARKER = '\x04';
     
-    let device: any;
+    let device: any = preAuthorizedDevice;
     let server: any;
     
     let connectionTimeout: ReturnType<typeof setTimeout>;
@@ -105,36 +107,23 @@ export function requestBlePairing(
     };
 
     try {
-      if (!forcePrompt) {
-        try {
-          const devices = await (navigator as any).bluetooth.getDevices();
-          device = devices.find((d: any) => !!d.id);
-        } catch (e) {}
-      }
-
       if (!device) {
-        device = await (navigator as any).bluetooth.requestDevice({
-          filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
-        });
+          if (!forcePrompt) {
+            try {
+              const devices = await (navigator as any).bluetooth.getDevices();
+              device = devices.find((d: any) => !!d.id);
+            } catch (e) {}
+          }
+
+          if (!device) {
+            device = await (navigator as any).bluetooth.requestDevice({
+              filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+            });
+          }
       }
       connectionTimeout = setTimeout(() => {
         finish({ success: false, reason: "Connection timed out. The phone is unreachable or not responding." });
       }, 20000);
-      
-      try {
-        if (device.watchingAdvertisements !== undefined) {
-           await new Promise<void>((resolveAdv, rejectAdv) => {
-              const advTimeout = setTimeout(() => rejectAdv(new Error("Advertisement timeout: device is no longer in range")), 5000);
-              device.addEventListener("advertisementreceived", () => {
-                 clearTimeout(advTimeout);
-                 resolveAdv();
-              }, { once: true });
-              device.watchAdvertisements().catch(rejectAdv);
-           });
-        }
-      } catch(e) {
-        throw e;
-      }
 
       let char: any;
       for (let i = 0; i < 4; i++) {
@@ -150,32 +139,30 @@ export function requestBlePairing(
           break; // Connected and services found
         } catch (e) {
           if (aborted) return;
-          if (i === 3) throw e; // Max retries
+          if (i === 3) {
+             return finish({ success: false, reason: "Could not establish connection to the phone. Ensure Bluetooth is on." });
+          }
           console.warn(`GATT dropped, retrying in 1s... (${i+1}/4)`);
           await new Promise(r => setTimeout(r, 1000));
           if (aborted) return;
         }
       }
-      if (!char || aborted) return;
-      await char.startNotifications();
-
+      if (!char || aborted) {
+          if (!aborted) finish({ success: false, reason: "Connection to phone failed or services are unavailable." });
+          return;
+      }
+      
+      clearTimeout(connectionTimeout); // Successfully connected, stop the abort timer
+      
       let myKeyPair: CryptoKeyPair;
       let lastSharedSecret: Uint8Array | null = null;
       let inboundBuffer = "";
-
-      const send = async (msg: string) => {
-        const encoder = new TextEncoder();
-        const bytes = encoder.encode(msg + EOM_MARKER);
-        const chunkSize = 480;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          await char.writeValue(bytes.slice(i, i + chunkSize));
-        }
-      };
-
+      
       char.addEventListener('characteristicvaluechanged', async (event: any) => {
         const dataView = event.target.value; // DataView
         const text = new TextDecoder().decode(dataView);
         console.log(`[Ext/BLE Pairing] Received chunk len=${text.length}, text: ${text}`);
+        if(onLog) onLog(`Chunk rx: len=${text.length}, hasEom=${text.includes(EOM_MARKER)}`);
         
         inboundBuffer += text;
 
@@ -184,16 +171,23 @@ export function requestBlePairing(
           const fullMessage = inboundBuffer.substring(0, eomIdx);
           inboundBuffer = inboundBuffer.substring(eomIdx + 1);
           console.log(`[Ext/BLE Pairing] Complete message assembled: ${fullMessage}`);
+          if(onLog) onLog(`Full Msg parsed!`);
 
           try {
             const message = JSON.parse(fullMessage) as SyncMessage;
 
             if (message.type === "pairingChallenge") {
-              const peerJwk = message.payload.pubKey as string;
-              const sharedSecret = await deriveEcdhSharedSecret(myKeyPair.privateKey, peerJwk);
-              lastSharedSecret = sharedSecret;
-              const pin = await computeEcdhPin(sharedSecret);
-              onPinReady(pin);
+              if(onLog) onLog(`Challenge rx - deriving secret`);
+              try {
+                  const peerJwk = message.payload.pubKey as string;
+                  const sharedSecret = await deriveEcdhSharedSecret(myKeyPair.privateKey, peerJwk);
+                  lastSharedSecret = sharedSecret;
+                  const pin = await computeEcdhPin(sharedSecret);
+                  onPinReady(pin);
+              } catch(cryptoErr: any) {
+                  if(onLog) onLog(`Crypto crash! ${cryptoErr.message}`);
+                  finish({ success: false, reason: `Crypto crash: ${cryptoErr.message}` });
+              }
             } else if (message.type === "pairingSuccess") {
               const wrappedVek = message.payload.wrappedVek as string;
               const peerDevice = message.payload.device as DeviceInfo;
@@ -201,11 +195,28 @@ export function requestBlePairing(
             } else if (message.type === "error") {
               finish({ success: false, reason: message.payload.message as string });
             }
-          } catch (e) {
+          } catch (e: any) {
+            if(onLog) onLog(`JSON Parse or Unknown crash: ${e.message}`);
             finish({ success: false, reason: "Malformed response from phone." });
           }
         }
       });
+
+      await char.startNotifications();
+      await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time
+
+      const send = async (msg: string) => {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(msg + EOM_MARKER);
+        const chunkSize = 480;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const end = Math.min(i + chunkSize, bytes.length);
+          const chunk = bytes.slice(i, end);
+          await char.writeValue(chunk);
+        }
+      };
+
+
 
       device.addEventListener('gattserverdisconnected', () => {
         finish({ success: false, reason: "Phone dropped the connection abruptly or rejected." });

@@ -407,8 +407,24 @@ async function updateCredential(uuid: string, websiteName: string, websiteUrl: s
  */
 async function attemptBackgroundSync(): Promise<void> {
   const vek = await getVek();
+  if (!vek) return;
+
+  const authMethod = await ExtensionStorage.getAuthMethod();
+  if (authMethod === "bluetooth") {
+     try {
+       await setupOffscreenDocument();
+       const vekRaw = Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", vek)));
+       await chrome.runtime.sendMessage({
+           type: 'BLE_EXECUTE_SYNC',
+           vekRaw,
+           forcePrompt: false,
+       });
+     } catch {}
+     return;
+  }
+
   const lastHost = await ExtensionStorage.getLastHost();
-  if (!vek || !lastHost) return;
+  if (!lastHost) return;
   const [host, portStr] = lastHost.split(":");
   const port = Number(portStr) || 51827;
   try {
@@ -544,8 +560,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: (e as Error).message });
         }
         break;
-
       }
+      case "TRIGGER_BLE_SYNC":
+        await setupOffscreenDocument();
+        try {
+            const result = await chrome.runtime.sendMessage({
+                type: 'BLE_EXECUTE_SYNC',
+                vekRaw: message.vekRaw,
+                forcePrompt: message.forcePrompt,
+            });
+            sendResponse(result ?? { ok: false, error: "Offscreen document dropped the message" });
+        } catch (e) {
+            sendResponse({ ok: false, error: (e as Error).message });
+        }
+        break;
+      case "BLE_EXECUTE_PAIRING":
+        await setupOffscreenDocument();
+        try {
+            const result = await chrome.runtime.sendMessage({
+                type: 'BLE_EXECUTE_PAIRING',
+                deviceName: message.deviceName,
+                deviceId: message.deviceId
+            });
+            sendResponse(result ?? { success: false, reason: "Offscreen document dropped the message" });
+        } catch (e) {
+            sendResponse({ success: false, reason: (e as Error).message });
+        }
+        break;
+      case "BLE_PAIR_DEVICE":
+        chrome.windows.create({
+            url: chrome.runtime.getURL('popup/popup.html?mode=ble-pair'),
+            type: "normal",
+            width: 450,
+            height: 450,
+            focused: true,
+        });
+        sendResponse({ ok: true });
+        break;
       case "CREATE_PAIRING_PACKAGE": {
         const vek = await getVek();
         if (!vek) {
@@ -569,6 +620,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (e) {
           sendResponse({ paired: false, error: (e as Error).message });
         }
+        break;
+      case "STORAGE_GET": {
+        const key = String(message.key);
+        const res = await chrome.storage.local.get(key);
+        sendResponse({ value: res[key] });
+        break;
+      }
+      case "STORAGE_SET": {
+        const key = String(message.key);
+        await chrome.storage.local.set({ [key]: message.value });
+        sendResponse({ ok: true });
+        break;
+      }
+      case "STORAGE_CLEAR":
+        await chrome.storage.local.clear();
+        sendResponse({ ok: true });
         break;
       default:
         sendResponse({ error: "Unknown message type" });

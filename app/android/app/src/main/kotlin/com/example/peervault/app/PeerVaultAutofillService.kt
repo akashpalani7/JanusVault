@@ -109,7 +109,7 @@ class PeerVaultAutofillService : AutofillService() {
                             }
                             val suggestDataset = Dataset.Builder()
                             if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                val dummyIntent = PendingIntent.getBroadcast(applicationContext, reqCodeOffset + 1003, Intent("com.example.peervault.DUMMY"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                                val dummyIntent = PendingIntent.getActivity(applicationContext, reqCodeOffset + 1003, Intent(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                                 val inlineSuggest = buildInlinePresentation(
                                     inlineSpecs!!.first(), "Suggest password", "Strong password", dummyIntent
                                 )
@@ -305,45 +305,109 @@ class PeerVaultAutofillService : AutofillService() {
 object FieldFinder {
     data class Fields(val usernameId: AutofillId?, val passwordId: AutofillId?, val appIdentifier: String)
 
+    private val USERNAME_KEYWORDS = setOf(
+        "username", "user_name", "userid", "user_id", "userlogin",
+        "email", "emailaddress", "email_address",
+        "login", "loginid", "login_id", "login_name",
+        "account", "accountid", "account_name",
+        "phone", "phonenumber", "phone_number", "mobile",
+        "identifier", "credential"
+    )
+
+    private val PASSWORD_KEYWORDS = setOf(
+        "password", "passwd", "pass_word", "passcode",
+        "pwd", "pin", "secret", "passphrase",
+        "current_password", "new_password", "confirm_password",
+        "currentpassword", "newpassword", "confirmpassword"
+    )
+
+    private val EXCLUDED_KEYWORDS = setOf(
+        "message", "chat", "compose", "comment",
+        "search", "query", "caption", "bio",
+        "description", "note", "post", "reply",
+        "dm", "direct", "story", "status",
+        "tweet", "text_input", "send", "write",
+        "subject", "title", "url", "address_bar",
+        "share", "forward", "edit_text_freeform"
+    )
+
+    private fun tokenize(input: String): Set<String> {
+        return input.lowercase()
+            .replace(Regex("([a-z])([A-Z])"), "$1_$2") // camelCase -> snake_case
+            .split(Regex("[_\\-. ]+"))
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
+
+    private fun matchesKeywords(idEntry: String?, hint: String?, keywords: Set<String>): Boolean {
+        val rawText = ((idEntry ?: "") + " " + (hint ?: "")).lowercase()
+        // Check exact match first
+        val normalized = rawText.replace(Regex("[^a-z0-9]"), "")
+        if (keywords.any { normalized == it.replace("_", "") }) return true
+        // Check token-level matching
+        val tokens = tokenize(rawText)
+        return keywords.any { keyword ->
+            val keyTokens = tokenize(keyword)
+            keyTokens.all { kt -> tokens.contains(kt) }
+        }
+    }
+
+    private fun isExcludedContext(idEntry: String?, hint: String?): Boolean {
+        val rawText = ((idEntry ?: "") + " " + (hint ?: "")).lowercase()
+        return EXCLUDED_KEYWORDS.any { rawText.contains(it) }
+    }
+
     fun find(structure: AssistStructure): Fields {
-        var usernameId: AutofillId? = null
-        var passwordId: AutofillId? = null
+        var hintBasedUsernameId: AutofillId? = null
+        var hintBasedPasswordId: AutofillId? = null
+        var heuristicUsernameId: AutofillId? = null
+        var heuristicPasswordId: AutofillId? = null
         var webDomain: String? = null
         val packageName = structure.activityComponent?.packageName ?: ""
 
         structure.forEachViewNode { node ->
             android.util.Log.d("FieldFinder", "Node: idEntry=${node.idEntry}, hint=${node.hint}, hints=${node.autofillHints?.toList()}, inputType=${node.inputType}, text=${node.text}, className=${node.className}")
-            
+
             if (webDomain == null) {
                 val domain = node.webDomain
                 if (!domain.isNullOrBlank()) webDomain = domain
             }
 
+            val idEntry = node.idEntry
+            val hint = node.hint
+
+            // Skip excluded contexts entirely to prevent triggering in chat apps
+            if (isExcludedContext(idEntry, hint)) return@forEachViewNode
+
             val hints = node.autofillHints
             if (hints != null) {
                 if (hints.any { it == View.AUTOFILL_HINT_USERNAME || it == View.AUTOFILL_HINT_EMAIL_ADDRESS }) {
-                    usernameId = usernameId ?: node.autofillId
+                    hintBasedUsernameId = hintBasedUsernameId ?: node.autofillId
                 }
                 if (hints.any { it == View.AUTOFILL_HINT_PASSWORD || it == "newPassword" || it == "new-password" }) {
-                    passwordId = passwordId ?: node.autofillId
+                    hintBasedPasswordId = hintBasedPasswordId ?: node.autofillId
                 }
             }
-            
-            // Always fallback to standard heuristics if OS hints didn't catch one or both
+
             val isPasswordInputType = (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
                 (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0 ||
-                (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0 || 
-                (node.inputType == 129) || (node.inputType == 225) || (node.inputType == 18) // standard password constants
-                
-            val idOrHint = ((node.idEntry ?: "") + " " + (node.hint ?: "")).lowercase()
-            
-            if ((isPasswordInputType || idOrHint.contains("password") || idOrHint.contains("pwd")) && passwordId == null) {
-                passwordId = node.autofillId
+                (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0 ||
+                (node.inputType == 129) || (node.inputType == 225) || (node.inputType == 18)
+
+            if (isPasswordInputType && heuristicPasswordId == null) {
+                heuristicPasswordId = node.autofillId
             }
-            if ((idOrHint.contains("user") || idOrHint.contains("email") || idOrHint.contains("login") || idOrHint.contains("identifier")) && usernameId == null) {
-                usernameId = node.autofillId
+
+            if (matchesKeywords(idEntry, hint, PASSWORD_KEYWORDS) && heuristicPasswordId == null) {
+                heuristicPasswordId = node.autofillId
+            }
+            if (matchesKeywords(idEntry, hint, USERNAME_KEYWORDS) && heuristicUsernameId == null) {
+                heuristicUsernameId = node.autofillId
             }
         }
+
+        val usernameId = hintBasedUsernameId ?: heuristicUsernameId
+        val passwordId = hintBasedPasswordId ?: heuristicPasswordId
 
         android.util.Log.d("FieldFinder", "Found: usernameId=$usernameId, passwordId=$passwordId, appIdentifier=$webDomain or $packageName")
         val appIdentifier = webDomain?.removePrefix("www.") ?: packageName

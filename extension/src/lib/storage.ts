@@ -19,13 +19,29 @@ const DEVICE_LIST_KEY = "peervault.known_devices"; // non-secret metadata receiv
  * are ever stored here, never a plaintext VEK.
  */
 export class ExtensionStorage {
+  private static async _get(key: string): Promise<any> {
+    if (chrome.storage) {
+      const res = await chrome.storage.local.get(key);
+      return res[key];
+    } else {
+      return (await chrome.runtime.sendMessage({ type: "STORAGE_GET", key }))?.value;
+    }
+  }
+
+  private static async _set(key: string, value: any): Promise<void> {
+    if (chrome.storage) {
+      await chrome.storage.local.set({ [key]: value });
+    } else {
+      await chrome.runtime.sendMessage({ type: "STORAGE_SET", key, value });
+    }
+  }
+
   static async getAllEntries(): Promise<EncryptedEntryRecord[]> {
-    const result = await chrome.storage.local.get(ENTRIES_KEY);
-    return (result[ENTRIES_KEY] as EncryptedEntryRecord[]) ?? [];
+    return (await this._get(ENTRIES_KEY)) ?? [];
   }
 
   static async saveAllEntries(entries: EncryptedEntryRecord[]): Promise<void> {
-    await chrome.storage.local.set({ [ENTRIES_KEY]: entries });
+    await this._set(ENTRIES_KEY, entries);
   }
 
   static async upsertEntries(incoming: EncryptedEntryRecord[]): Promise<void> {
@@ -64,87 +80,82 @@ export class ExtensionStorage {
    * against offline extraction.
    */
   static async getDeviceLocalKeyRaw(): Promise<string | null> {
-    const result = await chrome.storage.local.get(DEVICE_LOCAL_KEY_RAW);
-    return (result[DEVICE_LOCAL_KEY_RAW] as string) ?? null;
+    return (await this._get(DEVICE_LOCAL_KEY_RAW)) ?? null;
   }
 
   static async saveDeviceLocalKeyRaw(base64Key: string): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_LOCAL_KEY_RAW]: base64Key });
+    await this._set(DEVICE_LOCAL_KEY_RAW, base64Key);
   }
 
   static async getWrappedVek(): Promise<string | null> {
-    const result = await chrome.storage.local.get(WRAPPED_VEK_KEY);
-    return (result[WRAPPED_VEK_KEY] as string) ?? null;
+    return (await this._get(WRAPPED_VEK_KEY)) ?? null;
   }
 
   static async saveWrappedVek(wrapped: string): Promise<void> {
-    await chrome.storage.local.set({ [WRAPPED_VEK_KEY]: wrapped });
+    await this._set(WRAPPED_VEK_KEY, wrapped);
   }
 
   static async getDeviceId(): Promise<string | null> {
-    const result = await chrome.storage.local.get(DEVICE_ID_KEY);
-    return (result[DEVICE_ID_KEY] as string) ?? null;
+    return (await this._get(DEVICE_ID_KEY)) ?? null;
   }
 
   static async saveDeviceId(id: string): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_ID_KEY]: id });
+    await this._set(DEVICE_ID_KEY, id);
   }
 
   static async getPairedAt(): Promise<string | null> {
-    const result = await chrome.storage.local.get(DEVICE_PAIRED_AT_KEY);
-    return (result[DEVICE_PAIRED_AT_KEY] as string) ?? null;
+    return (await this._get(DEVICE_PAIRED_AT_KEY)) ?? null;
   }
 
   static async savePairedAt(iso: string): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_PAIRED_AT_KEY]: iso });
+    await this._set(DEVICE_PAIRED_AT_KEY, iso);
   }
 
   static async getLastSyncedAt(): Promise<string | null> {
-    const result = await chrome.storage.local.get(DEVICE_LAST_SYNCED_AT_KEY);
-    return (result[DEVICE_LAST_SYNCED_AT_KEY] as string) ?? null;
+    return (await this._get(DEVICE_LAST_SYNCED_AT_KEY)) ?? null;
   }
 
   static async saveLastSyncedAt(iso: string): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_LAST_SYNCED_AT_KEY]: iso });
+    await this._set(DEVICE_LAST_SYNCED_AT_KEY, iso);
   }
 
   static async getDisplayName(): Promise<string> {
-    const result = await chrome.storage.local.get(DEVICE_DISPLAY_NAME_KEY);
-    return (result[DEVICE_DISPLAY_NAME_KEY] as string) ?? "Browser extension";
+    return (await this._get(DEVICE_DISPLAY_NAME_KEY)) ?? "Browser extension";
   }
 
   static async saveDisplayName(name: string): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_DISPLAY_NAME_KEY]: name });
+    await this._set(DEVICE_DISPLAY_NAME_KEY, name);
   }
 
   static async getLastHost(): Promise<string | null> {
-    const result = await chrome.storage.local.get(LAST_HOST_KEY);
-    return (result[LAST_HOST_KEY] as string) ?? null;
+    return (await this._get(LAST_HOST_KEY)) ?? null;
   }
 
   static async saveLastHost(hostAndPort: string): Promise<void> {
-    await chrome.storage.local.set({ [LAST_HOST_KEY]: hostAndPort });
+    await this._set(LAST_HOST_KEY, hostAndPort);
   }
 
   static async getDeviceList(): Promise<DeviceInfo[]> {
-    const result = await chrome.storage.local.get(DEVICE_LIST_KEY);
-    return (result[DEVICE_LIST_KEY] as DeviceInfo[]) ?? [];
+    return (await this._get(DEVICE_LIST_KEY)) ?? [];
   }
 
   static async saveDeviceList(devices: DeviceInfo[]): Promise<void> {
-    await chrome.storage.local.set({ [DEVICE_LIST_KEY]: devices });
+    await this._set(DEVICE_LIST_KEY, devices);
   }
 
   static async getAuthMethod(): Promise<"wifi" | "bluetooth"> {
-    const result = await chrome.storage.local.get(AUTH_METHOD_KEY);
-    return (result[AUTH_METHOD_KEY] as "wifi" | "bluetooth") || "wifi"; // Default to wifi
+    return (await this._get(AUTH_METHOD_KEY)) || "wifi"; // Default to wifi
   }
 
   static async saveAuthMethod(method: "wifi" | "bluetooth"): Promise<void> {
-    await chrome.storage.local.set({ [AUTH_METHOD_KEY]: method });
+    await this._set(AUTH_METHOD_KEY, method);
   }
 
   static async wipeAll(): Promise<void> {
-    await chrome.storage.local.clear();
+    if (chrome.storage) {
+      await chrome.storage.local.clear();
+    } else {
+      await chrome.runtime.sendMessage({ type: "STORAGE_CLEAR" });
+    }
   }
 }

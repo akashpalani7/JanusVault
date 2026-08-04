@@ -90,7 +90,13 @@ Future<void> main() async {
 
   LanSyncService.instance.onPairingRequested = (deviceName, pin) async {
     final context = rootNavigatorKey.currentContext;
-    if (context == null) return false;
+    final isBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+    
+    if (context == null || isBackground) {
+      // In the future, we could add a `showPairingNotification` channel, but for now we must explicitly fail
+      // so the PC doesn't hang!
+      throw Exception("Cannot authorize new device pairing while the app is in the background. Please open PeerVault on your phone and try again.");
+    }
 
     final wantsToApprove = await showDialog<bool>(
       context: context,
@@ -101,7 +107,7 @@ Future<void> main() async {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-                'A new device ("$deviceName") wants to pair with this vault over Wi-Fi.'),
+                'A new device ("$deviceName") wants to pair with this vault over Wi-Fi/Bluetooth.'),
             const SizedBox(height: 16),
             const Text(
                 'Verify this PIN matches what is shown on the new device:',
