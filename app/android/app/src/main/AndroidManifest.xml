@@ -65,6 +65,14 @@
             android:theme="@style/Theme.AppCompat.Translucent"
             android:excludeFromRecents="true" />
 
+        <!-- Password generator activity launched from the "Generate password"
+             autofill chip on new signup forms. -->
+        <activity
+            android:name="com.example.peervault.app.PeerVaultAutofillGeneratorActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Translucent"
+            android:excludeFromRecents="true" />
+
         <!-- The OS-required Autofill Framework service. Declaring this,
              plus the app requesting the user enable PeerVault as their
              autofill provider (Settings > Autofill service), is what makes

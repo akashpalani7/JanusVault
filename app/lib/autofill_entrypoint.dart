@@ -105,6 +105,11 @@ Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
     final storedDomain =
         _extractDomain(url).isNotEmpty ? _extractDomain(url) : name;
 
+    // If queryDomain is totally empty, we cannot do a safe blind search. 
+    // Fall back to matching if stored domain is ALSO empty (which is extremely rare),
+    // but absolutely do not let `.endsWith('')` and `.contains('')` evaluate to true.
+    if (queryDomain.isEmpty) return false;
+
     // Exact domain match or suffix match (e.g. "github.com" matches "www.github.com")
     if (storedDomain == queryDomain || storedDomain.endsWith('.$queryDomain'))
       return true;

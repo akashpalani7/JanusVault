@@ -116,58 +116,196 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         val inlineSpecs = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             intent.getParcelableArrayListExtra<android.widget.inline.InlinePresentationSpec>("inline_specs")
         } else null
-        val useInline = inlineSpecs != null && inlineSpecs.isNotEmpty()
+        
+        val v1Spec = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R && inlineSpecs != null) {
+            inlineSpecs.firstOrNull { spec ->
+                androidx.autofill.inline.UiVersions.getVersions(spec.style).contains(androidx.autofill.inline.UiVersions.INLINE_UI_VERSION_1)
+            }
+        } else null
+        
+        val useInline = v1Spec != null
 
-        // ── CRITICAL FIX ──────────────────────────────────────────────
-        // The autofill service sets authentication on the DATASET level
-        // (authDatasetBuilder.setAuthentication()), NOT the FillResponse
-        // level. Per Android docs, dataset-level auth activities MUST
-        // return a single Dataset via EXTRA_AUTHENTICATION_RESULT.
-        // Returning a FillResponse here causes Android to silently
-        // discard it → password never fills.
+        // ── DATASET-LEVEL AUTH ────────────────────────────────────
+        // Because response-level auth breaks inline chips on Android,
+        // we use dataset-level auth for "Unlock Vault". The Android
+        // framework requires that dataset-level auth activities return
+        // a SINGLE Dataset via EXTRA_AUTHENTICATION_RESULT.
         // ───────────────────────────────────────────────────────────────
 
-        // Find the first matching credential with a non-blank password
-        var matchEntry: JSONObject? = null
+        val validEntries = mutableListOf<JSONObject>()
         for (i in 0 until entries.length()) {
             val entry = entries.getJSONObject(i)
             if (entry.optString("password", "").isNotBlank()) {
-                matchEntry = entry
-                break
+                validEntries.add(entry)
             }
         }
 
-        if (matchEntry == null) {
-            android.util.Log.w("PeerVault", "Auth: no matching entry with password found")
-            setResult(RESULT_CANCELED)
+        val tempFields = FieldFinder.Fields(usernameId, passwordId, "")
+
+        if (validEntries.isEmpty()) {
+            android.util.Log.w("PeerVault", "Auth: no matching entry with password found, returning Generate Password dataset")
+            
+            val suggestPresentation = android.widget.RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
+                setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD12 Generate strong password")
+                setTextViewText(com.example.peervault.R.id.subtitle, "PeerVault Generator")
+            }
+
+            val genIntent = Intent(applicationContext, PeerVaultAutofillGeneratorActivity::class.java).apply {
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, intent.getStringExtra("query") ?: "")
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+                if (inlineSpecs != null) {
+                    putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs.toList()))
+                }
+                addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+            }
+            
+            val mutabilityFlag = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                android.app.PendingIntent.FLAG_MUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            
+            val genPendingIntent = android.app.PendingIntent.getActivity(
+                applicationContext, 8000, genIntent,
+                android.app.PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
+            )
+
+            val builder = android.service.autofill.Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
+            builder.setAuthentication(genPendingIntent.intentSender)
+
+            val inlinePresentation = if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                AutofillUtils.buildInlinePresentation(applicationContext, v1Spec!!, "\uD83D\uDD12 Generate password", "")
+            } else null
+
+            if (inlinePresentation != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                builder.setInlinePresentation(inlinePresentation)
+            }
+
+            val autofillIds = listOfNotNull(tempFields.usernameId, tempFields.passwordId, focusedId)
+                .distinct()
+                .toTypedArray()
+
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                val presentationBuilder = android.service.autofill.Presentations.Builder()
+                    .setMenuPresentation(suggestPresentation)
+                inlinePresentation?.let { presentationBuilder.setInlinePresentation(it) }
+                val fieldPresentations = presentationBuilder.build()
+                
+                autofillIds.forEach { id ->
+                    val fb = android.service.autofill.Field.Builder()
+                        .setValue(android.view.autofill.AutofillValue.forText("PLACEHOLDER"))
+                        .setPresentations(fieldPresentations)
+                    builder.setField(id, fb.build())
+                }
+            } else {
+                autofillIds.forEach { id ->
+                    builder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), suggestPresentation)
+                }
+            }
+
+            val resultIntent = Intent()
+            resultIntent.putExtra(android.view.autofill.AutofillManager.EXTRA_AUTHENTICATION_RESULT, builder.build())
+            setResult(RESULT_OK, resultIntent)
             finish()
             return
         }
 
-        val websiteName = matchEntry.optString("websiteName", "")
-        val websiteUrl = matchEntry.optString("websiteUrl", "")
-        val title = if (websiteName.isNotBlank()) websiteName else if (websiteUrl.isNotBlank()) websiteUrl else "PeerVault Account"
-        val username = matchEntry.optString("username", "")
-        val password = matchEntry.optString("password", "")
+        fun returnDatasetForEntry(entry: JSONObject) {
+            val websiteName = entry.optString("websiteName", "")
+            val websiteUrl = entry.optString("websiteUrl", "")
+            val title = if (websiteName.isNotBlank()) websiteName else if (websiteUrl.isNotBlank()) websiteUrl else "PeerVault Account"
+            val username = entry.optString("username", "")
+            val password = entry.optString("password", "")
 
-        val tempFields = FieldFinder.Fields(usernameId, passwordId, "")
+            val dataset = if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                AutofillUtils.buildInlineDataset(
+                    applicationContext, packageName, tempFields, title, username, password,
+                    v1Spec!!, 0, focusedId
+                )
+            } else {
+                AutofillUtils.buildDropdownDataset(packageName, tempFields, title, username, password, focusedId)
+            }
 
-        // Build a single Dataset (NOT a FillResponse) with real credentials
-        val dataset = if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            AutofillUtils.buildInlineDataset(
-                applicationContext, packageName, tempFields, title, username, password,
-                inlineSpecs!!.first(), 0, focusedId
-            )
-        } else {
-            AutofillUtils.buildDropdownDataset(packageName, tempFields, title, username, password, focusedId)
+            val resultIntent = Intent()
+            resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
+            android.util.Log.d("PeerVault", "Auth: returning single Dataset for '$title' (user=$username)")
+            setResult(RESULT_OK, resultIntent)
+            finish()
         }
 
-        val resultIntent = Intent()
-        resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
+        if (validEntries.size == 1) {
+            returnDatasetForEntry(validEntries.first())
+            return
+        }
 
-        android.util.Log.d("PeerVault", "Auth: returning Dataset for '$title' (user=$username)")
-        setResult(RESULT_OK, resultIntent)
-        finish()
+        // ── MULTI-ACCOUNT UI ──────────────────────────────────────────
+        // There are multiple matching accounts. Instead of response-level
+        // auth (which is buggy), we simply draw a native selection UI
+        // right here in the transparent Auth activity.
+        val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
+
+        val root = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(24), dp(32), dp(24), dp(24))
+            setBackgroundColor(0xFF1E1E2E.toInt())
+        }
+
+        val titleTv = android.widget.TextView(this).apply {
+            text = "Select Account"
+            textSize = 22f
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 0, 0, dp(16))
+        }
+        root.addView(titleTv)
+
+        validEntries.forEach { entry ->
+            val username = entry.optString("username", "")
+            val accTitle = entry.optString("websiteName", "")
+            val displayLabel = if (username.isNotBlank()) username else accTitle.ifBlank { "Saved Account" }
+
+            val btn = android.widget.Button(this).apply {
+                text = "👤 $displayLabel"
+                textSize = 16f
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(0xFF3A3A5E.toInt())
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    setMargins(0, 0, 0, dp(12))
+                }
+            }
+            btn.setOnClickListener {
+                btn.isEnabled = false
+                returnDatasetForEntry(entry)
+            }
+            root.addView(btn)
+        }
+
+        val cancelBtn = android.widget.Button(this).apply {
+            text = "Cancel"
+            setTextColor(0xFFAAAAAA.toInt())
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+        }
+        cancelBtn.setOnClickListener {
+            setResult(RESULT_CANCELED)
+            finish()
+        }
+        root.addView(cancelBtn)
+
+        val scrollView = android.widget.ScrollView(this).apply {
+            setBackgroundColor(0xFF1E1E2E.toInt())
+            addView(root)
+        }
+        setContentView(scrollView)
     }
 
 }

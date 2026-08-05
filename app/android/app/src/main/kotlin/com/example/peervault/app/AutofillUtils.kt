@@ -73,42 +73,72 @@ object AutofillUtils {
         useInline: Boolean,
         inlineSpecs: List<InlinePresentationSpec>?,
         queryHashCode: Int,
-        focusedId: AutofillId?
+        focusedId: AutofillId?,
+        query: String = "",
+        capturedUsername: String = ""
     ): Boolean {
         val passwordId = fields.passwordId ?: return false
 
-        val suggestedPassword = generateStrongPassword(20)
         val suggestPresentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
             setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD12 Generate strong password")
             setTextViewText(com.example.peervault.R.id.subtitle, "PeerVault Generator")
         }
 
-        val builder = Dataset.Builder()
+        // Auth-gated: tapping the chip launches the generator activity
+        // where the user can configure password length and character sets.
+        val genIntent = Intent(context, PeerVaultAutofillGeneratorActivity::class.java).apply {
+            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
+            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
+            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, fields.usernameId)
+            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+            if (inlineSpecs != null) {
+                putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
+            }
+            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+        }
+        val mutabilityFlag = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_MUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val genPendingIntent = PendingIntent.getActivity(
+            context, queryHashCode + 2000, genIntent,
+            PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
+        )
+
+        val builder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
+        builder.setAuthentication(genPendingIntent.intentSender)
 
         val inlinePresentation = if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !inlineSpecs.isNullOrEmpty()) {
-            val dummyIntent = PendingIntent.getActivity(
-                context, queryHashCode + 1003,
-                Intent(context, PeerVaultAutofillAuthActivity::class.java).apply {
-                    putExtra("notify_only", true) // Ensures it immediately closes if accidentally tapped
-                },
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
             buildInlinePresentation(context, inlineSpecs.first(), "\uD83D\uDD12 Generate password", "")
         } else null
 
         if (inlinePresentation != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setValue(passwordId, AutofillValue.forText(suggestedPassword), suggestPresentation, inlinePresentation)
-            focusedId?.let {
-                if (it != passwordId && it != fields.usernameId) {
-                    builder.setValue(it, AutofillValue.forText(suggestedPassword), suggestPresentation, inlinePresentation)
-                }
+            builder.setInlinePresentation(inlinePresentation)
+        }
+
+        val autofillIds = listOfNotNull(fields.usernameId, fields.passwordId, focusedId)
+            .distinct()
+            .toTypedArray()
+
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            val presentationBuilder = android.service.autofill.Presentations.Builder()
+                .setMenuPresentation(suggestPresentation)
+            inlinePresentation?.let { presentationBuilder.setInlinePresentation(it) }
+            val fieldPresentations = presentationBuilder.build()
+
+            autofillIds.forEach { id ->
+                val fb = android.service.autofill.Field.Builder()
+                    .setValue(AutofillValue.forText("PLACEHOLDER"))
+                    .setPresentations(fieldPresentations)
+                builder.setField(id, fb.build())
             }
         } else {
-            builder.setValue(passwordId, AutofillValue.forText(suggestedPassword), suggestPresentation)
-            focusedId?.let {
-                if (it != passwordId && it != fields.usernameId) {
-                    builder.setValue(it, AutofillValue.forText(suggestedPassword), suggestPresentation)
-                }
+            autofillIds.forEach { id ->
+                builder.setValue(id, AutofillValue.forText("PLACEHOLDER"), suggestPresentation)
             }
         }
 
@@ -142,7 +172,11 @@ object AutofillUtils {
             }
         }
         val inlinePresentation = buildInlinePresentation(context, spec, websiteName, username)
-        val builder = Dataset.Builder()
+        
+        // When appending multiple datasets directly to a FillResponse without Auth,
+        // Android Autofill requires each dataset to have a unique string ID to correctly
+        // map click selections. If absent, you can view the chips but tapping does nothing.
+        val builder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
         
         if (Build.VERSION.SDK_INT >= 33) { // Build.VERSION_CODES.TIRAMISU
             val presentationBuilder = android.service.autofill.Presentations.Builder()
@@ -193,7 +227,7 @@ object AutofillUtils {
         password: String,
         focusedId: AutofillId?,
     ): Dataset {
-        val builder = Dataset.Builder()
+        val builder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
         val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
             setTextViewText(com.example.peervault.R.id.title, websiteName)
             if (username.isNotBlank()) {
