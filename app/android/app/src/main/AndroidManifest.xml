@@ -61,12 +61,8 @@
              only the OS autofill framework and this app invoke it. -->
         <activity
             android:name="com.example.peervault.app.PeerVaultAutofillAuthActivity"
-            android:exported="false"
+            android:exported="true"
             android:theme="@style/Theme.AppCompat.Translucent"
-            android:launchMode="singleInstance"
-            android:taskAffinity=""
-            android:noHistory="true"
-            android:configChanges="orientation|keyboardHidden|screenSize"
             android:excludeFromRecents="true" />
 
         <!-- The OS-required Autofill Framework service. Declaring this,

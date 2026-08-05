@@ -52,9 +52,22 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 32),
-              _creating
-                  ? const CircularProgressIndicator()
-                  : FilledButton(onPressed: _createVault, child: const Text('Create my vault')),
+              if (_creating)
+                const CircularProgressIndicator()
+              else ...[
+                FilledButton(
+                  onPressed: _createVault,
+                  child: const Text('Create my vault'),
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(builder: (_) => const RecoveryScreen())
+                  ),
+                  icon: const Icon(Icons.settings_backup_restore),
+                  label: const Text('Recover using Recovery Kit'),
+                ),
+              ],
             ],
           ),
         ),

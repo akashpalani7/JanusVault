@@ -77,26 +77,44 @@ Future<dynamic> _handleCall(MethodCall call) async {
 /// [query] is a web domain (e.g. "instagram.com", extracted from
 /// `ViewNode.webDomain` for browser tabs) or, for native apps without a
 /// resolvable web domain, the Android package name (e.g.
-/// "com.instagram.android"). Matching here is intentionally simple
-/// substring matching against stored website names/URLs — perfect
-/// package<->domain association requires verifying Digital Asset Links
-/// (assetlinks.json), which is a good v2 improvement but not required for
-/// autofill to work.
+/// "com.instagram.android"). Uses domain-level matching for web domains
+/// and keyword-based fallback for package names.
 Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
-  final query = (args['query'] as String? ?? '').toLowerCase();
+  final query = (args['query'] as String? ?? '').toLowerCase().trim();
   if (!VaultSession.instance.isUnlocked) {
     return jsonEncode({'locked': true, 'entries': <dynamic>[]});
   }
   await VaultDatabase.instance.load(force: true);
   final all = await VaultRepository.instance.getAllEntries();
-  // Package-name style fallback (e.g. "com.instagram.android" -> "instagram
-  // android") — only useful when `query` isn't already a real domain.
-  final normalizedQuery = query.replaceAll('.', ' ').replaceAll('com ', '').trim();
+
+  // Extract domain from query (handles both "example.com" and "com.example.app")
+  final isPackageName = query.startsWith('com.') ||
+      query.startsWith('org.') ||
+      query.startsWith('net.');
+  final queryDomain = isPackageName
+      ? _packageToDomain(query)
+      : query
+          .replaceAll(RegExp(r'^(https?://)?'), '')
+          .replaceAll(RegExp(r'/.*$'), '');
+
   final matches = all.where((e) {
-    final haystack = '${e.websiteName} ${e.websiteUrl}'.toLowerCase();
-    return haystack.contains(query) ||
-        haystack.contains(normalizedQuery) ||
-        normalizedQuery.split(' ').any((part) => part.isNotEmpty && haystack.contains(part));
+    final name = e.websiteName.toLowerCase();
+    final url = e.websiteUrl.toLowerCase();
+
+    // Domain-level matching: check if stored URL/name contains the query domain
+    final storedDomain =
+        _extractDomain(url).isNotEmpty ? _extractDomain(url) : name;
+
+    // Exact domain match or suffix match (e.g. "github.com" matches "www.github.com")
+    if (storedDomain == queryDomain || storedDomain.endsWith('.$queryDomain'))
+      return true;
+    if (queryDomain == storedDomain || queryDomain.endsWith('.$storedDomain'))
+      return true;
+
+    // Fallback: keyword containment for package names or partial matches
+    if (name.contains(queryDomain) || url.contains(queryDomain)) return true;
+
+    return false;
   }).toList();
 
   return jsonEncode({
@@ -104,12 +122,29 @@ Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
     'entries': matches
         .map((e) => <String, dynamic>{
               'uuid': e.uuid,
-              'websiteName': e.websiteName,
+              'websiteName': e.websiteName.trim().isNotEmpty ? e.websiteName : (e.websiteUrl.isNotEmpty ? e.websiteUrl : 'Unnamed'),
+              'websiteUrl': e.websiteUrl,
               'username': e.username,
               'password': e.password,
             })
         .toList(),
   });
+}
+
+/// Extracts the domain from a URL string (e.g. "https://www.github.com/login" -> "github.com").
+String _extractDomain(String url) {
+  final cleaned = url
+      .replaceAll(RegExp(r'^(https?://)?'), '')
+      .replaceAll(RegExp(r'/.*$'), '');
+  return cleaned.replaceAll(RegExp(r'^www\.'), '');
+}
+
+/// Converts an Android package name to a likely domain (e.g. "com.instagram.android" -> "instagram").
+String _packageToDomain(String pkg) {
+  final parts = pkg.split('.');
+  // "com.instagram.android" -> "instagram", "com.whatsapp" -> "whatsapp"
+  if (parts.length >= 2) return parts[1];
+  return pkg;
 }
 
 /// Called from PeerVaultAutofillAuthActivity.kt AFTER it has already run a
@@ -185,19 +220,24 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
   // CAN run BiometricPrompt) to call back via `resolveApproval`.
   LanSyncService.instance.onAuthPromptRequested = (actionLabel) async {
     _pendingApprovalCompleter = Completer<bool>();
-    await _channel.invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
-    return _pendingApprovalCompleter!.future.timeout(const Duration(seconds: 55), onTimeout: () => false);
+    await _channel
+        .invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
+    return _pendingApprovalCompleter!.future
+        .timeout(const Duration(seconds: 55), onTimeout: () => false);
   };
-  BleGattService.instance.onAuthPromptRequested = LanSyncService.instance.onAuthPromptRequested;
+  BleGattService.instance.onAuthPromptRequested =
+      LanSyncService.instance.onAuthPromptRequested;
 
   try {
-    await LanSyncService.instance.startAdvertisingAndServing(deviceDisplayName: displayName);
+    await LanSyncService.instance
+        .startAdvertisingAndServing(deviceDisplayName: displayName);
   } catch (e) {
     print('LanSync autofill start failed: $e');
   }
 
   try {
-    await BleGattService.instance.startAdvertising(deviceDisplayName: displayName);
+    await BleGattService.instance
+        .startAdvertising(deviceDisplayName: displayName);
   } catch (e) {
     print('Ble autofill start failed: $e');
   }

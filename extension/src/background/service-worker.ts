@@ -603,6 +603,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: "This browser isn't paired with a vault yet" });
           break;
         }
+        const outcome = await requireApprovalOrDeny("generate a pairing code for a new device", vek);
+        if (outcome !== "approved") {
+          sendResponse({ ok: false, error: "Phone is unreachable or denied. If you lost your phone, you must use your Recovery Kit on the new device directly." });
+          break;
+        }
         const { printableCode, encoded } = await buildPairingPackage(vek);
         sendResponse({ ok: true, printableCode, encoded });
         break;

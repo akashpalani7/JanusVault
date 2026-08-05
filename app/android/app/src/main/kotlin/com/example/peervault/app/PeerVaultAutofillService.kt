@@ -4,10 +4,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.assist.AssistStructure
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.CancellationSignal
 import android.service.autofill.AutofillService
@@ -42,7 +40,7 @@ import org.json.JSONObject
  *   1. **Inline Suggestions** (Android 11+ / API 30+): renders autofill
  *      suggestions as keyboard-strip chips. This is the path that Chromium-
  *      based browsers (Chrome, Brave, Edge) prefer — the legacy dropdown
- *      approach causes \"contents cannot be autofilled\" errors in browser
+ *      approach causes "contents cannot be autofilled" errors in browser
  *      renderer sandboxes.
  *   2. **Legacy dropdown** (API 26–29, or when InlineSuggestionsRequest is
  *      absent): the traditional RemoteViews popup.
@@ -58,6 +56,8 @@ class PeerVaultAutofillService : AutofillService() {
         val structure = context.structure
         val fields = FieldFinder.find(structure)
 
+        android.util.Log.d("PeerVault", "onFillRequest: usernameId=${fields.usernameId}, passwordId=${fields.passwordId}, app=${fields.appIdentifier}")
+
         if (fields.usernameId == null && fields.passwordId == null) {
             callback.onSuccess(null)
             return
@@ -69,99 +69,112 @@ class PeerVaultAutofillService : AutofillService() {
                     val unlocked = AutofillBridge.isUnlocked(applicationContext)
                     val query = fields.appIdentifier
 
-                    val responseBuilder = FillResponse.Builder()
-
-                    // Determine whether the keyboard supports inline suggestions
                     val inlineSpecs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         request.inlineSuggestionsRequest?.inlinePresentationSpecs
                     } else null
-                    val useInline = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !inlineSpecs.isNullOrEmpty()
+                    val useInline = inlineSpecs != null && inlineSpecs.isNotEmpty()
 
-                    if (unlocked) {
-                        val raw = AutofillBridge.searchEntries(applicationContext, query)
-                        val json = JSONObject(raw)
-                        val entries = json.getJSONArray("entries")
+                    val focusedId = request.fillContexts.last().focusedId
 
-                        for (i in 0 until entries.length()) {
-                            val entry = entries.getJSONObject(i)
-                            val websiteName = entry.getString("websiteName")
-                            val username = entry.getString("username")
-                            val password = entry.getString("password")
-
-                            if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                val spec = inlineSpecs!![minOf(i, inlineSpecs.size - 1)]
-                                responseBuilder.addDataset(
-                                    buildInlineDataset(fields, websiteName, username, password, spec, i)
-                                )
-                            } else {
-                                responseBuilder.addDataset(
-                                    buildDropdownDataset(fields, websiteName, username, password)
-                                )
-                            }
-                        }
-
-                        if (entries.length() == 0) {
-                            val reqCodeOffset = query.hashCode()
-                            // 1. Suggest Password Dataset
-                            val suggestedPassword = generateStrongPassword(16)
-                            val suggestPresentation = RemoteViews(packageName, android.R.layout.simple_list_item_1).apply {
-                                setTextViewText(android.R.id.text1, "Suggest password: $suggestedPassword")
-                            }
-                            val suggestDataset = Dataset.Builder()
-                            if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                val dummyIntent = PendingIntent.getActivity(applicationContext, reqCodeOffset + 1003, Intent(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-                                val inlineSuggest = buildInlinePresentation(
-                                    inlineSpecs!!.first(), "Suggest password", "Strong password", dummyIntent
-                                )
-                                fields.usernameId?.let { suggestDataset.setValue(it, AutofillValue.forText(suggestedPassword), suggestPresentation, inlineSuggest) }
-                                fields.passwordId?.let { suggestDataset.setValue(it, AutofillValue.forText(suggestedPassword), suggestPresentation, inlineSuggest) }
-                                responseBuilder.addDataset(suggestDataset.build())
-                            }
-                            // Do not return a Legacy Dropdown dataset for Suggest Password when useInline is false,
-                            // as Chromium explicitly blocks RemoteViews dropdowns for unauthenticated data in modern Android.
-                        }
-                    } else {
-                        // Vault is locked — push notification immediately instead of showing chips.
+                    if (!unlocked) {
+                        // Vault is locked — return an authentication-gated dataset instead of a system notification
                         val appIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                            putExtra("notify_only", true)
+                            putExtra("notify_only", false)
+                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, query)
+                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
+                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_FOCUSED_ID, focusedId)
+                            if (inlineSpecs != null) {
+                                putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
+                            }
+                            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                            addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
                         }
                         val pendingIntent = PendingIntent.getActivity(
                             applicationContext, 4001, appIntent,
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
                         )
 
-                        val channelId = "autofill_unlock"
-                        val notificationManager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            val channel = NotificationChannel(
-                                channelId,
-                                "Autofill Unlock",
-                                NotificationManager.IMPORTANCE_HIGH
-                            )
-                            notificationManager.createNotificationChannel(channel)
+                        val responseBuilder = FillResponse.Builder()
+                        val autofillIds = listOfNotNull(fields.usernameId, fields.passwordId, focusedId)
+                            .distinct()
+                            .toTypedArray()
+                        
+                        val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
+                            setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD13 Unlock PeerVault")
+                            setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
                         }
 
-                        val notification = NotificationCompat.Builder(applicationContext, channelId)
-                            .setSmallIcon(android.R.drawable.ic_lock_lock)
-                            .setContentTitle("PeerVault is Locked")
-                            .setContentText("Tap here to unlock your vault and autofill passwords")
-                            .setPriority(NotificationCompat.PRIORITY_HIGH)
-                            .setContentIntent(pendingIntent)
-                            .setAutoCancel(true)
-                            .build()
+                        val authDatasetBuilder = Dataset.Builder()
+                        authDatasetBuilder.setAuthentication(pendingIntent.intentSender)
 
-                        notificationManager.notify(4001, notification)
-                        
-                        callback.onSuccess(null)
+                        if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && inlineSpecs != null) {
+                            val inlinePresentation = AutofillUtils.buildInlinePresentation(applicationContext, inlineSpecs.first(), "\uD83D\uDD13 Unlock PeerVault", "")
+                            inlinePresentation?.let {
+                                authDatasetBuilder.setInlinePresentation(it)
+                            }
+                            autofillIds.forEach { id ->
+                                authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
+                            }
+                        } else {
+                            autofillIds.forEach { id ->
+                                authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
+                            }
+                        }
+
+                        responseBuilder.addDataset(authDatasetBuilder.build())
+                        callback.onSuccess(responseBuilder.build())
                         return@withTimeout
                     }
 
-                    // SaveInfo — required for Android to call onSaveRequest after form submit
-                    buildSaveInfo(fields)?.let { responseBuilder.setSaveInfo(it) }
+                    // Vault is unlocked — search for matching entries
+                    val raw = AutofillBridge.searchEntries(applicationContext, query)
+                    val json = JSONObject(raw)
+                    val entries = json.getJSONArray("entries")
 
-                    android.util.Log.d("PeerVault", "Autofill onSuccess with inline=$useInline")
-                    callback.onSuccess(responseBuilder.build())
+                    val responseBuilder = FillResponse.Builder()
+                    var datasetsAdded = 0
+
+                    if (entries.length() > 0) {
+                        // Vault is unlocked (user already did biometric to unlock).
+                        // Return real credentials directly — tapping a chip fills immediately.
+                        for (i in 0 until entries.length()) {
+                            val entry = entries.getJSONObject(i)
+                            val websiteName = entry.optString("websiteName", "")
+                            val username = entry.optString("username", "")
+                            val password = entry.optString("password", "")
+
+                            val dataset = if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                AutofillUtils.buildInlineDataset(
+                                    applicationContext, packageName, fields, websiteName, username, password,
+                                    inlineSpecs!!.first(), i, focusedId
+                                )
+                            } else {
+                                AutofillUtils.buildDropdownDataset(packageName, fields, websiteName, username, password, focusedId)
+                            }
+                            responseBuilder.addDataset(dataset)
+                            datasetsAdded++
+                        }
+                    }
+
+                    if (entries.length() == 0 && fields.passwordId != null) {
+                        // No saved credentials for this site — offer password generation
+                        val suggestAdded = AutofillUtils.addSuggestPasswordDataset(
+                            applicationContext, packageName, responseBuilder, fields, useInline, inlineSpecs, query.hashCode(), focusedId
+                        )
+                        if (suggestAdded) datasetsAdded++
+                    }
+
+                        AutofillUtils.buildSaveInfo(fields)?.let { responseBuilder.setSaveInfo(it) }
+
+                    if (datasetsAdded > 0) {
+                        android.util.Log.d("PeerVault", "Autofill onSuccess with $datasetsAdded datasets, inline=$useInline")
+                        callback.onSuccess(responseBuilder.build())
+                    } else {
+                        android.util.Log.d("PeerVault", "Autofill onSuccess(null) — no datasets to show")
+                        callback.onSuccess(null)
+                    }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("PeerVault", "Autofill OS Timeout/Error: ${e.message}", e)
@@ -170,8 +183,8 @@ class PeerVaultAutofillService : AutofillService() {
         }
     }
 
-    override fun onSaveRequest(request: SaveRequest, callback: SaveCallback) {
-        val context: FillContext = request.fillContexts.last()
+    override fun onSaveRequest(request: android.service.autofill.SaveRequest, callback: android.service.autofill.SaveCallback) {
+        val context: android.service.autofill.FillContext = request.fillContexts.last()
         val structure = context.structure
         val fields = FieldFinder.find(structure)
 
@@ -203,99 +216,30 @@ class PeerVaultAutofillService : AutofillService() {
             }
         }
     }
-
-    private fun generateStrongPassword(length: Int): String {
-        val charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+"
-        val random = java.security.SecureRandom()
-        val buf = CharArray(length)
-        for (i in 0 until length) {
-            buf[i] = charset[random.nextInt(charset.length)]
-        }
-        return String(buf)
-    }
-
-    // ─────────────────────────────────────────────────────────
-    //  Inline Suggestions (API 30+) — keyboard-strip chips
-    // ─────────────────────────────────────────────────────────
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun buildInlineDataset(
-        fields: FieldFinder.Fields,
-        websiteName: String,
-        username: String,
-        password: String,
-        spec: InlinePresentationSpec,
-        index: Int,
-    ): Dataset {
-        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
-            setTextViewText(android.R.id.text1, websiteName)
-            setTextViewText(android.R.id.text2, username)
-        }
-        val dummyIntent = PendingIntent.getActivity(
-            applicationContext, 
-            2000 + index, 
-            Intent(), 
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val inlinePresentation = buildInlinePresentation(spec, websiteName, username, dummyIntent)
-        val builder = Dataset.Builder()
-        fields.usernameId?.let { builder.setValue(it, AutofillValue.forText(username), presentation, inlinePresentation) }
-        fields.passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation, inlinePresentation) }
-        return builder.build()
-    }
-
-    @RequiresApi(Build.VERSION_CODES.R)
-    private fun buildInlinePresentation(
-        spec: InlinePresentationSpec,
-        title: String,
-        subtitle: String,
-        pendingIntent: PendingIntent,
-    ): InlinePresentation {
-        // The Inline Suggestions API requires a PendingIntent even if we don't
-
-        val slice = InlineSuggestionUi.newContentBuilder(pendingIntent)
-            .setTitle(if (subtitle.isNotEmpty()) "$title | $subtitle" else title)
-            .build()
-            .slice
-
-        return InlinePresentation(slice, spec, /* pinned= */ false)
-    }
-
-    // ─────────────────────────────────────────────────────────
-    //  Legacy dropdown (API 26–29 / non-inline-capable IMEs)
-    // ─────────────────────────────────────────────────────────
-
-    private fun buildDropdownDataset(fields: FieldFinder.Fields, websiteName: String, username: String, password: String): Dataset {
-        val builder = Dataset.Builder()
-        val presentation = RemoteViews(packageName, android.R.layout.simple_list_item_2).apply {
-            setTextViewText(android.R.id.text1, websiteName)
-            setTextViewText(android.R.id.text2, username)
-        }
-        fields.usernameId?.let { builder.setValue(it, AutofillValue.forText(username), presentation) }
-        fields.passwordId?.let { builder.setValue(it, AutofillValue.forText(password), presentation) }
-        return builder.build()
-    }
-
-    private fun buildSaveInfo(fields: FieldFinder.Fields): SaveInfo? {
-        val passwordId = fields.passwordId ?: return null
-        val saveDataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD or
-            (if (fields.usernameId != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0)
-        val requiredIds = listOfNotNull(fields.usernameId, passwordId).toTypedArray()
-        
-        val builder = SaveInfo.Builder(saveDataTypes, requiredIds)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            builder.setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
-        }
-        return builder.build()
-    }
-
 }
 
 
 /**
  * Walks an AssistStructure once and locates the best-guess username and
- * password AutofillIds using Android's standard autofill hints first, then
- * falling back to InputType/HTML heuristics for apps that don't set hints.
+ * password AutofillIds using a multi-layered detection strategy:
+ *
+ *   Layer 0 (highest confidence): HTML `autocomplete` attributes from
+ *           browser webviews — `current-password`, `new-password`,
+ *           `username`, `email`.
+ *   Layer 1: Android autofill hints (`View.AUTOFILL_HINT_USERNAME`, etc.)
+ *   Layer 2: InputType flags (`TYPE_TEXT_VARIATION_PASSWORD`, etc.)
+ *   Layer 3 (lowest confidence): idEntry/hint keyword matching with
+ *           tokenized word-boundary checks (not substring).
+ *
+ * Exclusion: known non-login contexts (chat, search, compose, etc.) are
+ * filtered out using token-level matching (not substring) to avoid false
+ * negatives like "research_password" being excluded by a "search" keyword.
+ *
+ * Structural guard: a heuristic-only username field (from layer 3) is
+ * discarded if no password field was found anywhere — this prevents lone
+ * text inputs in chat apps from triggering autofill. Android-hint-based
+ * or HTML-attribute-based username fields are kept even without a password
+ * field, because two-step login forms legitimately have username-only pages.
  *
  * Extracts the page's web domain when present (Chrome, Brave, Edge, etc.
  * populate `ViewNode.webDomain` on rendered page nodes). Using `webDomain`
@@ -304,6 +248,8 @@ class PeerVaultAutofillService : AutofillService() {
  */
 object FieldFinder {
     data class Fields(val usernameId: AutofillId?, val passwordId: AutofillId?, val appIdentifier: String)
+
+    // ── Keywords ──────────────────────────────────────────────
 
     private val USERNAME_KEYWORDS = setOf(
         "username", "user_name", "userid", "user_id", "userlogin",
@@ -321,15 +267,29 @@ object FieldFinder {
         "currentpassword", "newpassword", "confirmpassword"
     )
 
+    /** HTML `autocomplete` attribute values that indicate credential fields. */
+    private val HTML_USERNAME_AUTOCOMPLETE = setOf(
+        "username", "email", "tel"
+    )
+    private val HTML_PASSWORD_AUTOCOMPLETE = setOf(
+        "current-password", "new-password", "password"
+    )
+
+    /**
+     * Words that indicate NON-login contexts, checked at token level.
+     * "search" won't exclude "research_password" because tokenization
+     * splits it into {"research", "password"}, not matching "search".
+     */
     private val EXCLUDED_KEYWORDS = setOf(
         "message", "chat", "compose", "comment",
         "search", "query", "caption", "bio",
         "description", "note", "post", "reply",
         "dm", "direct", "story", "status",
-        "tweet", "text_input", "send", "write",
-        "subject", "title", "url", "address_bar",
-        "share", "forward", "edit_text_freeform"
+        "tweet", "send", "write",
+        "share", "forward", "freeform"
     )
+
+    // ── Tokenizer ─────────────────────────────────────────────
 
     private fun tokenize(input: String): Set<String> {
         return input.lowercase()
@@ -341,7 +301,8 @@ object FieldFinder {
 
     private fun matchesKeywords(idEntry: String?, hint: String?, keywords: Set<String>): Boolean {
         val rawText = ((idEntry ?: "") + " " + (hint ?: "")).lowercase()
-        // Check exact match first
+        if (rawText.isBlank()) return false
+        // Check exact normalized match first (e.g. "emailAddress" -> "emailaddress")
         val normalized = rawText.replace(Regex("[^a-z0-9]"), "")
         if (keywords.any { normalized == it.replace("_", "") }) return true
         // Check token-level matching
@@ -352,12 +313,24 @@ object FieldFinder {
         }
     }
 
+    /**
+     * Token-level exclusion check. Returns true ONLY if the field's tokens
+     * match an excluded keyword — substring matching is NOT used, so
+     * "user_message_compose" is excluded (contains token "compose") but
+     * "research_password" is NOT excluded (no token "search" — only "research").
+     */
     private fun isExcludedContext(idEntry: String?, hint: String?): Boolean {
         val rawText = ((idEntry ?: "") + " " + (hint ?: "")).lowercase()
-        return EXCLUDED_KEYWORDS.any { rawText.contains(it) }
+        if (rawText.isBlank()) return false
+        val tokens = tokenize(rawText)
+        return EXCLUDED_KEYWORDS.any { tokens.contains(it) }
     }
 
+    // ── Main detection ────────────────────────────────────────
+
     fun find(structure: AssistStructure): Fields {
+        var htmlUsernameId: AutofillId? = null
+        var htmlPasswordId: AutofillId? = null
         var hintBasedUsernameId: AutofillId? = null
         var hintBasedPasswordId: AutofillId? = null
         var heuristicUsernameId: AutofillId? = null
@@ -366,8 +339,7 @@ object FieldFinder {
         val packageName = structure.activityComponent?.packageName ?: ""
 
         structure.forEachViewNode { node ->
-            android.util.Log.d("FieldFinder", "Node: idEntry=${node.idEntry}, hint=${node.hint}, hints=${node.autofillHints?.toList()}, inputType=${node.inputType}, text=${node.text}, className=${node.className}")
-
+            // Extract web domain from any node that has it
             if (webDomain == null) {
                 val domain = node.webDomain
                 if (!domain.isNullOrBlank()) webDomain = domain
@@ -376,9 +348,38 @@ object FieldFinder {
             val idEntry = node.idEntry
             val hint = node.hint
 
-            // Skip excluded contexts entirely to prevent triggering in chat apps
-            if (isExcludedContext(idEntry, hint)) return@forEachViewNode
+            // Skip excluded contexts to prevent triggering in chat apps
+            if (isExcludedContext(idEntry, hint)) {
+                android.util.Log.d("FieldFinder", "EXCLUDED: idEntry=$idEntry, hint=$hint")
+                return@forEachViewNode
+            }
 
+            // ── Layer 0: HTML autocomplete attributes (highest confidence for webviews) ──
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val htmlInfo = node.htmlInfo
+                if (htmlInfo != null) {
+                    val attributes = htmlInfo.attributes
+                    if (attributes != null) {
+                        for (pair in attributes) {
+                            if (pair.first.equals("autocomplete", ignoreCase = true) ||
+                                pair.first.equals("type", ignoreCase = true) ||
+                                pair.first.equals("name", ignoreCase = true)) {
+                                val attrValue = pair.second?.lowercase() ?: continue
+                                if (HTML_PASSWORD_AUTOCOMPLETE.any { attrValue.contains(it) }) {
+                                    htmlPasswordId = htmlPasswordId ?: node.autofillId
+                                    android.util.Log.d("FieldFinder", "HTML password: attr=${pair.first}=$attrValue")
+                                }
+                                if (HTML_USERNAME_AUTOCOMPLETE.any { attrValue.contains(it) }) {
+                                    htmlUsernameId = htmlUsernameId ?: node.autofillId
+                                    android.util.Log.d("FieldFinder", "HTML username: attr=${pair.first}=$attrValue")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Layer 1: Android autofill hints (high confidence) ──
             val hints = node.autofillHints
             if (hints != null) {
                 if (hints.any { it == View.AUTOFILL_HINT_USERNAME || it == View.AUTOFILL_HINT_EMAIL_ADDRESS }) {
@@ -389,15 +390,20 @@ object FieldFinder {
                 }
             }
 
-            val isPasswordInputType = (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
-                (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0 ||
-                (node.inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0 ||
-                (node.inputType == 129) || (node.inputType == 225) || (node.inputType == 18)
+            // ── Layer 2: InputType flags (medium confidence for password) ──
+            val inputType = node.inputType
+            val isPasswordInputType = (inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0 ||
+                (inputType and android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD) != 0 ||
+                (inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0 ||
+                (inputType == (android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD)) ||
+                (inputType == (android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD))
 
             if (isPasswordInputType && heuristicPasswordId == null) {
                 heuristicPasswordId = node.autofillId
+                android.util.Log.d("FieldFinder", "InputType password: inputType=$inputType, id=$idEntry")
             }
 
+            // ── Layer 3: Keyword matching (lowest confidence, strict word-boundary) ──
             if (matchesKeywords(idEntry, hint, PASSWORD_KEYWORDS) && heuristicPasswordId == null) {
                 heuristicPasswordId = node.autofillId
             }
@@ -406,12 +412,26 @@ object FieldFinder {
             }
         }
 
-        val usernameId = hintBasedUsernameId ?: heuristicUsernameId
-        val passwordId = hintBasedPasswordId ?: heuristicPasswordId
+        // Resolution: prefer HTML-based > hint-based > heuristic
+        val usernameId = htmlUsernameId ?: hintBasedUsernameId ?: heuristicUsernameId
+        val passwordId = htmlPasswordId ?: hintBasedPasswordId ?: heuristicPasswordId
 
-        android.util.Log.d("FieldFinder", "Found: usernameId=$usernameId, passwordId=$passwordId, appIdentifier=$webDomain or $packageName")
+        // STRUCTURAL GUARD: If we only found a "username" field from heuristics
+        // (layer 3) but NO password field from ANY layer, this is very likely
+        // NOT a login form (e.g. a lone text field in a chat app). Discard it.
+        // Exception: HTML-attribute-based and Android-hint-based username fields
+        // are kept, because 2-step login forms legitimately have username-only pages.
+        val finalUsernameId = if (passwordId == null && usernameId != null &&
+            htmlUsernameId == null && hintBasedUsernameId == null) {
+            android.util.Log.d("FieldFinder", "Discarding heuristic-only username (no password field found)")
+            null
+        } else {
+            usernameId
+        }
+
         val appIdentifier = webDomain?.removePrefix("www.") ?: packageName
-        return Fields(usernameId, passwordId, appIdentifier)
+        android.util.Log.d("FieldFinder", "Result: username=$finalUsernameId, password=$passwordId, app=$appIdentifier")
+        return Fields(finalUsernameId, passwordId, appIdentifier)
     }
 }
 

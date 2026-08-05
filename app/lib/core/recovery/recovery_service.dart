@@ -142,11 +142,18 @@ class RecoveryService {
       wrappedVekBase64: wrapped.toBase64(),
     ));
 
-    final settings = _db.settings;
+    var settings = _db.settings;
     if (settings != null) {
       settings.selfDeviceId = deviceId;
-      await _db.saveSettings(settings);
+    } else {
+      settings = VaultSettingsRecord(
+        recycleBinRetentionDays: 30, // Default 30 days
+        requireBiometricForReveal: true,
+        selfDeviceId: deviceId,
+        vaultCreatedAt: now, 
+      );
     }
+    await _db.saveSettings(settings);
 
     return generateNewRecoveryKit();
   }
