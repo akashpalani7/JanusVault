@@ -32,6 +32,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
     companion object {
         const val EXTRA_QUERY = "peervault.gen.query"
         const val EXTRA_USERNAME = "peervault.gen.username"
+        const val EXTRA_PASSWORD = "peervault.gen.password"
         const val EXTRA_USERNAME_ID = "peervault.gen.username_id"
         const val EXTRA_PASSWORD_ID = "peervault.gen.password_id"
         const val EXTRA_FOCUSED_ID = "peervault.gen.focused_id"
@@ -41,6 +42,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
 
         val query = intent.getStringExtra(EXTRA_QUERY) ?: ""
+        val isSaveRequest = intent.getBooleanExtra("is_save_request", false)
         val usernameId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_USERNAME_ID)
         val passwordId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_PASSWORD_ID)
         val focusedId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_FOCUSED_ID)
@@ -60,7 +62,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
         // Title
         val titleTv = TextView(this).apply {
-            text = "🔑 Generate Password"
+            text = if (isSaveRequest) "💾 Save Password" else "🔑 Generate Password"
             textSize = 22f
             setTextColor(0xFFFFFFFF.toInt())
             gravity = Gravity.CENTER
@@ -68,9 +70,30 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
         }
         root.addView(titleTv)
 
+        // Account Name
+        val nameEt = EditText(this).apply {
+            hint = "Account Name"
+            setHintTextColor(0xFF666688.toInt())
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xFF2A2A3E.toInt())
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(4), 0, dp(8)) }
+            isSingleLine = true
+            
+            // Auto-format "instagram.com" -> "Instagram"
+            val defaultName = query.substringBeforeLast('.').replaceFirstChar { 
+                if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() 
+            }
+            setText(defaultName.ifEmpty { "Saved Account" })
+        }
+        root.addView(nameEt)
+
         // Website label
         val websiteEt = EditText(this).apply {
-            hint = "Website / App name"
+            hint = "Website URL / App package"
             setHintTextColor(0xFF666688.toInt())
             setTextColor(0xFFFFFFFF.toInt())
             setBackgroundColor(0xFF2A2A3E.toInt())
@@ -104,8 +127,9 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
         }
         root.addView(usernameEt)
 
-        // Password preview
-        val passwordPreview = TextView(this).apply {
+        // Password preview / input
+        val passwordPreview = EditText(this).apply {
+            if (isSaveRequest) hint = "Password"
             textSize = 16f
             setTextColor(0xFF00E676.toInt())
             gravity = Gravity.CENTER
@@ -170,15 +194,17 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
         }
 
         // Initial generation
-        var currentPassword = generatePassword()
-        passwordPreview.text = currentPassword
+        if (isSaveRequest) {
+            passwordPreview.setText(intent.getStringExtra(EXTRA_PASSWORD) ?: "")
+        } else {
+            passwordPreview.setText(generatePassword())
+        }
 
         // Regenerate on slider change
         slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 lengthLabel.text = "Length: ${progress + 8}"
-                currentPassword = generatePassword()
-                passwordPreview.text = currentPassword
+                passwordPreview.setText(generatePassword())
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -186,8 +212,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
         // Regenerate on toggle change
         val toggleListener = CompoundButton.OnCheckedChangeListener { _, _ ->
-            currentPassword = generatePassword()
-            passwordPreview.text = currentPassword
+            passwordPreview.setText(generatePassword())
         }
         cbUpper.setOnCheckedChangeListener(toggleListener)
         cbLower.setOnCheckedChangeListener(toggleListener)
@@ -202,11 +227,18 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
             setPadding(dp(16), dp(8), dp(16), dp(8))
         }
         regenBtn.setOnClickListener {
-            currentPassword = generatePassword()
-            passwordPreview.text = currentPassword
+            passwordPreview.setText(generatePassword())
         }
         root.addView(regenBtn)
-
+        
+        // Hide generator tools for save requests
+        if (isSaveRequest) {
+            lengthLabel.visibility = android.view.View.GONE
+            slider.visibility = android.view.View.GONE
+            toggleRow.visibility = android.view.View.GONE
+            regenBtn.visibility = android.view.View.GONE
+        }
+        
         // Spacer
         root.addView(android.view.View(this).apply {
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(16))
@@ -214,7 +246,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
         // Save & Fill button
         val saveBtn = Button(this).apply {
-            text = "✅ Save & Fill"
+            text = if (isSaveRequest) "✅ Save to Vault" else "✅ Save & Fill"
             textSize = 16f
             setTextColor(0xFFFFFFFF.toInt())
             setBackgroundColor(0xFF6C63FF.toInt())
@@ -225,13 +257,21 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
             saveBtn.text = "Saving..."
             scope.launch {
                 try {
-                    val finalUsername = usernameEt.text.toString().trim()
+                    val finalName = nameEt.text.toString().trim()
                     val finalWebsite = websiteEt.text.toString().trim()
+                    val finalUsername = usernameEt.text.toString().trim()
+                    val finalPassword = passwordPreview.text.toString().trim()
                     
                     // Save to vault
                     AutofillBridge.saveCapturedCredential(
-                        applicationContext, finalWebsite, finalUsername, currentPassword
+                        applicationContext, finalName, finalWebsite, finalUsername, finalPassword
                     )
+
+                    if (isSaveRequest) {
+                        setResult(RESULT_OK)
+                        finish()
+                        return@launch
+                    }
 
                     // Build the Dataset to return
                     val fields = FieldFinder.Fields(usernameId, passwordId, "")
@@ -246,11 +286,11 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
                     val dataset = if (useInline && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
                         AutofillUtils.buildInlineDataset(
-                            applicationContext, packageName, fields, finalWebsite, finalUsername, currentPassword,
+                            applicationContext, packageName, fields, finalWebsite, finalUsername, finalPassword,
                             v1Spec!!, 0, focusedId
                         )
                     } else {
-                        AutofillUtils.buildDropdownDataset(packageName, fields, finalWebsite, finalUsername, currentPassword, focusedId)
+                        AutofillUtils.buildDropdownDataset(packageName, fields, finalWebsite, finalUsername, finalPassword, focusedId)
                     }
 
                     val resultIntent = Intent()

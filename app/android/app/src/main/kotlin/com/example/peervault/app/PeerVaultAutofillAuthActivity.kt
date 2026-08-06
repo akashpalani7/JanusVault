@@ -104,6 +104,20 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             return
         }
 
+        if (intent.getBooleanExtra("save_request", false)) {
+            val appIdentifier = intent.getStringExtra(EXTRA_QUERY) ?: ""
+            val username = intent.getStringExtra("save_username") ?: ""
+            val password = intent.getStringExtra("save_password") ?: ""
+            val titleCasedName = appIdentifier.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+            AutofillBridge.saveCapturedCredential(applicationContext, titleCasedName, appIdentifier, username, password)
+            android.widget.Toast.makeText(applicationContext, "Saved to PeerVault!", android.widget.Toast.LENGTH_SHORT).show()
+            
+            val resultIntent = Intent()
+            setResult(RESULT_OK, resultIntent)
+            finish()
+            return
+        }
+
         if (usernameId == null && passwordId == null) {
             setResult(RESULT_CANCELED)
             finish()
@@ -151,7 +165,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             }
 
             val genIntent = Intent(applicationContext, PeerVaultAutofillGeneratorActivity::class.java).apply {
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, intent.getStringExtra("query") ?: "")
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
                 putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
                 putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
                 putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
@@ -171,7 +185,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             }
             
             val genPendingIntent = android.app.PendingIntent.getActivity(
-                applicationContext, 8000, genIntent,
+                applicationContext, java.util.UUID.randomUUID().hashCode(), genIntent,
                 android.app.PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
             )
 

@@ -272,14 +272,15 @@ object AutofillUtils {
 
     fun buildSaveInfo(fields: FieldFinder.Fields): SaveInfo? {
         val passwordId = fields.passwordId ?: return null
-        val saveDataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD or
-            (if (fields.usernameId != null) SaveInfo.SAVE_DATA_TYPE_USERNAME else 0)
-        val requiredIds = listOfNotNull(fields.usernameId, passwordId).toTypedArray()
+        val saveDataTypes = SaveInfo.SAVE_DATA_TYPE_PASSWORD
+        val requiredIds = arrayOf(passwordId)
         
         val builder = SaveInfo.Builder(saveDataTypes, requiredIds)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            builder.setFlags(SaveInfo.FLAG_SAVE_ON_ALL_VIEWS_INVISIBLE)
+        if (fields.usernameId != null) {
+            builder.setOptionalIds(arrayOf(fields.usernameId))
         }
+        val displayApp = fields.appIdentifier.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+        builder.setDescription("Save credentials for $displayApp")
         return builder.build()
     }
 }

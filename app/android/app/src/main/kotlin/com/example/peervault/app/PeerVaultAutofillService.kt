@@ -66,7 +66,6 @@ class PeerVaultAutofillService : AutofillService() {
         serviceScope.launch {
             try {
                 kotlinx.coroutines.withTimeout(4500L) {
-                    val unlocked = AutofillBridge.isUnlocked(applicationContext)
                     val query = fields.appIdentifier
 
                     val inlineSpecs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -83,159 +82,110 @@ class PeerVaultAutofillService : AutofillService() {
 
                     val focusedId = request.fillContexts.last().focusedId
 
-                    if (!unlocked) {
-                        // Vault is locked — use RESPONSE-LEVEL authentication.
-                        // This means the auth activity returns a FillResponse
-                        // (not a Dataset), enabling multi-account: all matching
-                        // entries appear as separate chips after biometric unlock.
-                        var capturedUsername = ""
-                        if (fields.usernameId != null) {
-                            structure.forEachViewNode { node ->
-                                if (node.autofillId == fields.usernameId) {
+                    // STRICT PER-REQUEST AUTHENTICATION
+                    // By unconditionally returning a locked dataset here, we force the Android 
+                    // Autofill Framework to demand user interaction (Unlock PeerVault -> Biometrics)
+                    // on EVERY new autofill session. The OS caches this chip during the active page.
+                    // This prevents credentials from site B leaking instantly after unlocking site A.
+
+                    var capturedUsername = ""
+                    if (fields.usernameId != null) {
+                        structure.forEachViewNode { node ->
+                            if (node.autofillId == fields.usernameId) {
+                                val value = node.autofillValue
+                                if (value != null && value.isText) {
+                                    capturedUsername = value.textValue.toString()
+                                } else {
                                     capturedUsername = node.text?.toString() ?: ""
                                 }
                             }
                         }
-
-                        val appIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
-                            putExtra("notify_only", false)
-                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, query)
-                            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
-                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
-                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
-                            putExtra(PeerVaultAutofillAuthActivity.EXTRA_FOCUSED_ID, focusedId)
-                            if (inlineSpecs != null) {
-                                putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
-                            }
-                            addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                            addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
-                        }
-                        val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            PendingIntent.FLAG_MUTABLE
-                        } else {
-                            PendingIntent.FLAG_UPDATE_CURRENT
-                        }
-                        val pendingIntent = PendingIntent.getActivity(
-                            applicationContext, 4001, appIntent,
-                            PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
-                        )
-
-                        val responseBuilder = FillResponse.Builder()
-                        val autofillIds = listOfNotNull(fields.usernameId, fields.passwordId, focusedId)
-                            .distinct()
-                            .toTypedArray()
-                        
-                        val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-                            setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD13 Unlock PeerVault")
-                            setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
-                        }
-
-                        val authDatasetBuilder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
-                        authDatasetBuilder.setAuthentication(pendingIntent.intentSender)
-
-                        if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && inlineSpecs != null) {
-                            val inlinePresentation = AutofillUtils.buildInlinePresentation(applicationContext, v1Spec!!, "\uD83D\uDD13 Unlock PeerVault", "")
-                            inlinePresentation?.let {
-                                authDatasetBuilder.setInlinePresentation(it)
-                            }
-                            if (Build.VERSION.SDK_INT >= 33) {
-                                val presentationBuilder = android.service.autofill.Presentations.Builder()
-                                    .setMenuPresentation(presentation)
-                                inlinePresentation?.let { presentationBuilder.setInlinePresentation(it) }
-                                val fieldPresentations = presentationBuilder.build()
-                                
-                                autofillIds.forEach { id ->
-                                    val fb = android.service.autofill.Field.Builder()
-                                        .setValue(android.view.autofill.AutofillValue.forText("PLACEHOLDER"))
-                                        .setPresentations(fieldPresentations)
-                                    authDatasetBuilder.setField(id, fb.build())
-                                }
-                            } else {
-                                autofillIds.forEach { id ->
-                                    authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
-                                }
-                            }
-                        } else {
-                            if (Build.VERSION.SDK_INT >= 33) {
-                                val fieldPresentations = android.service.autofill.Presentations.Builder()
-                                    .setMenuPresentation(presentation)
-                                    .build()
-                                autofillIds.forEach { id ->
-                                    val fb = android.service.autofill.Field.Builder()
-                                        .setValue(android.view.autofill.AutofillValue.forText("PLACEHOLDER"))
-                                        .setPresentations(fieldPresentations)
-                                    authDatasetBuilder.setField(id, fb.build())
-                                }
-                            } else {
-                                autofillIds.forEach { id ->
-                                    authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
-                                }
-                            }
-                        }
-
-                        responseBuilder.addDataset(authDatasetBuilder.build())
-                        callback.onSuccess(responseBuilder.build())
-                        return@withTimeout
                     }
 
-                    // Vault is unlocked — search for matching entries
-                    val raw = AutofillBridge.searchEntries(applicationContext, query)
-                    val json = JSONObject(raw)
-                    val entries = json.getJSONArray("entries")
+                    val appIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
+                        putExtra("notify_only", false)
+                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, query)
+                        putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
+                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
+                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_FOCUSED_ID, focusedId)
+                        if (inlineSpecs != null) {
+                            putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
+                        }
+                        addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                        addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+                    }
+                    val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_MUTABLE
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val pendingIntent = PendingIntent.getActivity(
+                        applicationContext, 4001, appIntent,
+                        PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
+                    )
 
                     val responseBuilder = FillResponse.Builder()
-                    var datasetsAdded = 0
-
-                    if (entries.length() > 0) {
-                        // Vault is unlocked (user already did biometric to unlock).
-                        // Return real credentials directly — tapping a chip fills immediately.
-                        for (i in 0 until entries.length()) {
-                            val entry = entries.getJSONObject(i)
-                            val websiteName = entry.optString("websiteName", "")
-                            val username = entry.optString("username", "")
-                            val password = entry.optString("password", "")
-
-                            val dataset = if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                AutofillUtils.buildInlineDataset(
-                                    applicationContext, packageName, fields, websiteName, username, password,
-                                    v1Spec!!, i, focusedId
-                                )
-                            } else {
-                                AutofillUtils.buildDropdownDataset(packageName, fields, websiteName, username, password, focusedId)
-                            }
-                            responseBuilder.addDataset(dataset)
-                            datasetsAdded++
-                        }
+                    val autofillIds = listOfNotNull(fields.usernameId, fields.passwordId, focusedId)
+                        .distinct()
+                        .toTypedArray()
+                    
+                    val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
+                        setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD13 Unlock PeerVault")
+                        setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
                     }
 
-                    if (entries.length() == 0 && fields.passwordId != null) {
-                        // Extract typed username text from the AssistStructure (if provided)
-                        var capturedUsername = ""
-                        if (fields.usernameId != null) {
-                            structure.forEachViewNode { node ->
-                                if (node.autofillId == fields.usernameId) {
-                                    capturedUsername = node.text?.toString() ?: ""
-                                }
+                    val authDatasetBuilder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
+                    authDatasetBuilder.setAuthentication(pendingIntent.intentSender)
+
+                    if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && inlineSpecs != null) {
+                        val inlinePresentation = AutofillUtils.buildInlinePresentation(applicationContext, v1Spec!!, "\uD83D\uDD13 Unlock PeerVault", "")
+                        inlinePresentation?.let {
+                            authDatasetBuilder.setInlinePresentation(it)
+                        }
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            val presentationBuilder = android.service.autofill.Presentations.Builder()
+                                .setMenuPresentation(presentation)
+                            inlinePresentation?.let { presentationBuilder.setInlinePresentation(it) }
+                            val fieldPresentations = presentationBuilder.build()
+                            
+                            autofillIds.forEach { id ->
+                                val fb = android.service.autofill.Field.Builder()
+                                    .setValue(android.view.autofill.AutofillValue.forText("PLACEHOLDER"))
+                                    .setPresentations(fieldPresentations)
+                                authDatasetBuilder.setField(id, fb.build())
+                            }
+                        } else {
+                            autofillIds.forEach { id ->
+                                authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
                             }
                         }
-                        
-                        // No saved credentials for this site — offer password generation
-                        val suggestAdded = AutofillUtils.addSuggestPasswordDataset(
-                            applicationContext, packageName, responseBuilder, fields, useInline, inlineSpecs, query.hashCode(), focusedId, query, capturedUsername
-                        )
-                        if (suggestAdded) datasetsAdded++
-                    }
-
-                        AutofillUtils.buildSaveInfo(fields)?.let { responseBuilder.setSaveInfo(it) }
-
-                    if (datasetsAdded > 0) {
-                        android.util.Log.d("PeerVault", "Autofill onSuccess with $datasetsAdded datasets, inline=$useInline")
-                        callback.onSuccess(responseBuilder.build())
                     } else {
-                        android.util.Log.d("PeerVault", "Autofill onSuccess(null) — no datasets to show")
-                        callback.onSuccess(null)
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            val fieldPresentations = android.service.autofill.Presentations.Builder()
+                                .setMenuPresentation(presentation)
+                                .build()
+                            autofillIds.forEach { id ->
+                                val fb = android.service.autofill.Field.Builder()
+                                    .setValue(android.view.autofill.AutofillValue.forText("PLACEHOLDER"))
+                                    .setPresentations(fieldPresentations)
+                                authDatasetBuilder.setField(id, fb.build())
+                            }
+                        } else {
+                            autofillIds.forEach { id ->
+                                authDatasetBuilder.setValue(id, android.view.autofill.AutofillValue.forText("PLACEHOLDER"), presentation)
+                            }
+                        }
                     }
+
+                    val saveInfo = AutofillUtils.buildSaveInfo(fields)
+                    if (saveInfo != null) {
+                        responseBuilder.setSaveInfo(saveInfo)
+                    }
+
+                    responseBuilder.addDataset(authDatasetBuilder.build())
+                    callback.onSuccess(responseBuilder.build())
                 }
             } catch (e: Exception) {
                 android.util.Log.e("PeerVault", "Autofill OS Timeout/Error: ${e.message}", e)
@@ -252,14 +202,27 @@ class PeerVaultAutofillService : AutofillService() {
         var username = ""
         var password = ""
         structure.forEachViewNode { node ->
-            val value = node.autofillValue
-            if (value != null && value.isText) {
-                if (node.autofillId == fields.usernameId) username = value.textValue.toString()
-                if (node.autofillId == fields.passwordId) password = value.textValue.toString()
+            if (node.autofillId == fields.usernameId) {
+                val value = node.autofillValue
+                if (value != null && value.isText) {
+                    username = value.textValue.toString()
+                } else {
+                    username = node.text?.toString() ?: ""
+                }
+            }
+            if (node.autofillId == fields.passwordId) {
+                val value = node.autofillValue
+                if (value != null && value.isText) {
+                    password = value.textValue.toString()
+                } else {
+                    password = node.text?.toString() ?: ""
+                }
             }
         }
 
         if (password.isEmpty()) {
+            android.util.Log.e("PeerVault", "No password captured during save request")
+            android.widget.Toast.makeText(applicationContext, "Failed to extract password value", android.widget.Toast.LENGTH_SHORT).show()
             callback.onFailure("No password captured")
             return
         }
@@ -267,12 +230,35 @@ class PeerVaultAutofillService : AutofillService() {
         serviceScope.launch {
             try {
                 if (!AutofillBridge.isUnlocked(applicationContext)) {
-                    callback.onFailure("Unlock PeerVault to save this password")
+                    val authIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
+                        putExtra("save_request", true)
+                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, fields.appIdentifier)
+                        putExtra("save_username", username)
+                        putExtra("save_password", password)
+                        addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                        addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+                    }
+                    val mutabilityFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_MUTABLE
+                    } else {
+                        PendingIntent.FLAG_UPDATE_CURRENT
+                    }
+                    val pendingIntent = PendingIntent.getActivity(
+                        applicationContext, 4002, authIntent,
+                        PendingIntent.FLAG_CANCEL_CURRENT or mutabilityFlag
+                    )
+                    callback.onSuccess(pendingIntent.intentSender)
                     return@launch
                 }
-                AutofillBridge.saveCapturedCredential(applicationContext, fields.appIdentifier, username, password)
+                
+                val titleCasedName = fields.appIdentifier.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+                AutofillBridge.saveCapturedCredential(applicationContext, titleCasedName, fields.appIdentifier, username, password)
+                android.widget.Toast.makeText(applicationContext, "Saved to PeerVault!", android.widget.Toast.LENGTH_SHORT).show()
                 callback.onSuccess()
             } catch (e: Exception) {
+                android.util.Log.e("PeerVault", "Save error: ${e.message}")
+                android.widget.Toast.makeText(applicationContext, "Save failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 callback.onFailure(e.message)
             }
         }

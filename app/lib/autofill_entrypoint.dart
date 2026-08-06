@@ -172,14 +172,15 @@ Future<bool> _unlockVault() async {
 /// standard save-request confirmation UI.
 Future<bool> _saveCapturedCredential(Map<dynamic, dynamic> args) async {
   if (!VaultSession.instance.isUnlocked) return false;
-  final websiteName = args['appIdentifier'] as String? ?? 'Unknown app';
+  final websiteName = args['websiteName'] as String? ?? args['appIdentifier'] as String? ?? 'Unknown app';
+  final websiteUrl = args['websiteUrl'] as String? ?? args['appIdentifier'] as String? ?? '';
   final username = args['username'] as String? ?? '';
   final password = args['password'] as String? ?? '';
   if (password.isEmpty) return false;
 
   await VaultRepository.instance.createEntry(
     websiteName: websiteName,
-    websiteUrl: websiteName,
+    websiteUrl: websiteUrl,
     username: username,
     password: password,
   );

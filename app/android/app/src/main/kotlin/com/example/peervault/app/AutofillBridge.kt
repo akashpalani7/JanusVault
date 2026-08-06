@@ -112,11 +112,11 @@ object AutofillBridge {
         return invoke("unlockVault", null) as Boolean
     }
 
-    suspend fun saveCapturedCredential(context: Context, appIdentifier: String, username: String, password: String): Boolean {
+    suspend fun saveCapturedCredential(context: Context, websiteName: String, websiteUrl: String, username: String, password: String): Boolean {
         ensureReady(context)
         return invoke(
             "saveCapturedCredential",
-            mapOf("appIdentifier" to appIdentifier, "username" to username, "password" to password),
+            mapOf("websiteName" to websiteName, "websiteUrl" to websiteUrl, "username" to username, "password" to password),
         ) as Boolean
     }
 
