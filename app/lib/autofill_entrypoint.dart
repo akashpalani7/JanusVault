@@ -205,8 +205,17 @@ Completer<bool>? _pendingApprovalCompleter;
 /// does. Without this silent unlock, the always-on listener could accept
 /// connections but could never actually answer the VEK-derived handshake,
 /// making it useless.
+Timer? _syncShutdownTimer;
+
 Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
+  _syncShutdownTimer?.cancel();
+  _syncShutdownTimer = Timer(const Duration(minutes: 2), () {
+    print('BLE Listener timed out after 2 minutes. Auto-stopping.');
+    _stopSyncListening();
+  });
+
   final displayName = args['displayName'] as String? ?? 'This device';
+  final bluetoothEnabled = args['bluetoothEnabled'] as bool? ?? true;
 
   if (!VaultSession.instance.isUnlocked) {
     final settings = VaultDatabase.instance.settings;
@@ -241,15 +250,20 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
     print('LanSync autofill start failed: $e');
   }
 
-  try {
-    await BleGattService.instance
-        .startAdvertising(deviceDisplayName: displayName);
-  } catch (e) {
-    print('Ble autofill start failed: $e');
+  if (bluetoothEnabled) {
+    try {
+      await BleGattService.instance
+          .startAdvertising(deviceDisplayName: displayName);
+    } catch (e) {
+      print('Ble autofill start failed: $e');
+    }
+  } else {
+    print('Bluetooth is off. Skipping BleGattService to prevent intrusive OS dialogs.');
   }
 }
 
 Future<void> _stopSyncListening() async {
+  _syncShutdownTimer?.cancel();
   await LanSyncService.instance.stopAdvertisingAndServing();
   await BleGattService.instance.stopAdvertising();
 }

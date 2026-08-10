@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_providers.dart';
 import '../../core/storage/vault_database.dart';
+import '../permissions/permissions_screen.dart';
 import '../recovery/recovery_screen.dart';
-import '../vault/vault_list_screen.dart';
 
 class UnlockScreen extends ConsumerStatefulWidget {
   const UnlockScreen({super.key});
@@ -40,10 +40,7 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
       ref.read(vaultUnlockedProvider.notifier).state = true;
 
       if (mounted) {
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const VaultListScreen()),
-          (route) => false,
-        );
+        PermissionsScreen.checkAndRoute(context, removeUntil: true);
       }
     } catch (e) {
       setState(() => _errorMessage = 'Unlock failed: $e');
@@ -62,30 +59,39 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.lock_outline, size: 72),
-              const SizedBox(height: 16),
-              Text('PeerVault', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 24),
-              if (_isAuthenticating) const CircularProgressIndicator(),
-              if (_errorMessage != null) ...[
-                Text(_errorMessage!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: _unlock,
-                  icon: const Icon(Icons.fingerprint),
-                  label: const Text('Try again'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
-                  child: const Text('Lost your device? Use Recovery Kit'),
-                ),
-              ],
-            ],
+          child: Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.lock_outline, size: 72, color: Colors.indigo),
+                  const SizedBox(height: 16),
+                  Text('PeerVault', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.indigo)),
+                  const SizedBox(height: 24),
+                  if (_isAuthenticating) const CircularProgressIndicator(),
+                  if (_errorMessage != null) ...[
+                    Text(_errorMessage!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _unlock,
+                      icon: const Icon(Icons.fingerprint),
+                      label: const Text('Unlock Vault'),
+                      style: FilledButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
+                      child: const Text('Lost your device? Use Recovery Kit'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),

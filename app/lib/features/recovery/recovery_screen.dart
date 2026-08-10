@@ -8,7 +8,7 @@ import '../../core/models/recovery_kit.dart';
 import '../../core/models/trusted_device.dart';
 import '../../core/recovery/recovery_service.dart';
 import '../../core/vault/vault_session.dart';
-import '../vault/vault_list_screen.dart';
+import '../permissions/permissions_screen.dart';
 
 class RecoveryScreen extends ConsumerStatefulWidget {
   const RecoveryScreen({super.key});
@@ -79,10 +79,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
   }
 
   void _finishToVault() {
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const VaultListScreen()),
-      (route) => false,
-    );
+    PermissionsScreen.checkAndRoute(context);
   }
 
   @override
@@ -141,10 +138,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
           subtitle: null,
           kit: _newKit!,
           onDone: () {
-            Navigator.of(context).pushAndRemoveUntil(
-              MaterialPageRoute(builder: (_) => const VaultListScreen()),
-              (route) => false,
-            );
+            PermissionsScreen.checkAndRoute(context);
           },
         ),
     ];

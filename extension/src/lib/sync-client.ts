@@ -61,7 +61,17 @@ export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Pro
         vekRaw,
         forcePrompt,
     });
-    if (!response?.ok) throw new Error(response?.error || 'BLE sync failed');
+    if (!response?.ok) {
+        if (navigator.userAgent.includes("Mac OS X") && response?.error?.includes("NetworkError")) {
+            console.warn("[Ext/Sync] Mac OS BLE NetworkError detected - silently falling back to Wi-Fi");
+            const lastHost = await ExtensionStorage.getLastHost();
+            if (lastHost) {
+                const [host, port] = lastHost.split(":");
+                return syncWithPhone(host, parseInt(port, 10), vek);
+            }
+        }
+        throw new Error(response?.error || 'BLE sync failed');
+    }
     return { pulled: response.pulled, pushed: response.pushed };
 }
 

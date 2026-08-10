@@ -63,6 +63,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       return;
     }
 
+    final existingEntries = await VaultRepository.instance.getAllEntries();
+
     int saved = 0;
     int skipped = 0;
     
@@ -90,6 +92,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final websiteName = (nameIdx != -1 && nameIdx < cols.length && cols[nameIdx].trim().isNotEmpty) 
           ? cols[nameIdx].trim() 
           : domain;
+
+      if (existingEntries.any((e) => (e.websiteName == websiteName || e.websiteUrl == url || e.websiteUrl == domain) && e.username == username)) {
+        skipped++;
+        continue;
+      }
 
       await VaultRepository.instance.createEntry(
         websiteName: websiteName,
@@ -177,10 +184,54 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               items: const [7, 14, 30, 60, 90]
                   .map((d) => DropdownMenuItem(value: d, child: Text('$d days')))
                   .toList(),
-              onChanged: (v) {
-                if (v == null) return;
+              onChanged: (v) async {
+                if (v == null || v == _retentionDays) return;
+
+                if (v < _retentionDays) {
+                  final cutoff = DateTime.now().toUtc().subtract(Duration(days: v));
+                  final all = await VaultRepository.instance.getAllEntries(includeDeleted: true);
+                  final affectedEntries = all.where((e) => e.deleted && e.lastUpdated.isBefore(cutoff)).toList();
+
+                  if (context.mounted) {
+                    late String dialogTitle;
+                    late String dialogContent;
+                    late String btnLabel;
+
+                    if (affectedEntries.isNotEmpty) {
+                      final names = affectedEntries.map((e) => e.websiteName).take(5).join(', ');
+                      final more = affectedEntries.length > 5 ? ' and ${affectedEntries.length - 5} more' : '';
+                      dialogTitle = 'Warning: Immediate Deletion';
+                      dialogContent = 'Decreasing the retention to $v days will instantly and permanently erase ${affectedEntries.length} items currently in the Recycle Bin:\n\n$names$more\n\nAre you sure you want to proceed?';
+                      btnLabel = 'Apply and Delete';
+                    } else {
+                      dialogTitle = 'Confirm Retention Decrease';
+                      dialogContent = 'Are you sure you want to decrease the time deleted passwords are kept to $v days? Future and existing deleted items will be purged sooner.';
+                      btnLabel = 'Apply';
+                    }
+
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        title: Text(dialogTitle),
+                        content: Text(dialogContent),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
+                          FilledButton(onPressed: () => Navigator.of(c).pop(true), child: Text(btnLabel)),
+                        ],
+                      ),
+                    );
+
+                    if (confirm != true) return;
+                  }
+                }
+
                 setState(() => _retentionDays = v);
-                _save();
+                await _save();
+                
+                final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: v);
+                if (purged > 0 && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Automatically purged $purged overdue entries.')));
+                }
               },
             ),
           ),

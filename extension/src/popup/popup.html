@@ -67,6 +67,7 @@
         <button id="navPasswords" class="nav-btn active">Passwords</button>
         <button id="navDevices" class="nav-btn">Devices</button>
         <button id="navImport" class="nav-btn">Import</button>
+        <button id="navRecycleBin" class="nav-btn">Recycle Bin</button>
       </nav>
 
       <section id="searchView" class="hidden">
@@ -84,9 +85,15 @@
         <div style="display:flex; gap:6px; align-items:center;">
           <input id="newPasswordInput" type="text" placeholder="Password" style="flex:1;" />
         </div>
-        <input id="newPasswordLengthSlider" type="range" min="8" max="32" value="20" />
-        <p id="newPasswordLengthLabel" class="hint">20 characters</p>
-        <button id="regeneratePasswordButton" class="secondary">Generate new password</button>
+        <div style="display:flex; justify-content:space-between; margin:8px 0; font-size:12px;">
+          <label><input type="checkbox" id="genUppercase" checked> A-Z</label>
+          <label><input type="checkbox" id="genLowercase" checked> a-z</label>
+          <label><input type="checkbox" id="genNumbers" checked> 0-9</label>
+          <label><input type="checkbox" id="genSymbols" checked> !@#</label>
+        </div>
+        <input id="newPasswordLengthSlider" type="range" min="8" max="64" value="20" />
+        <p id="newPasswordLengthLabel" class="hint" style="text-align:center; margin-top:2px;">20 characters</p>
+        <button id="regeneratePasswordButton" class="secondary" style="margin-bottom:8px;">↻ Regenerate Password</button>
         <button id="saveNewEntryButton">Save entry</button>
         <button id="cancelAddEntryButton" class="secondary">Cancel</button>
         <p id="addEntryStatus" class="hint"></p>
@@ -120,6 +127,13 @@
         <h2>Linked devices</h2>
         <ul id="devicesList"></ul>
         <p id="devicesEmptyHint" class="hint hidden">No other devices seen yet — sync at least once to learn about them.</p>
+      </section>
+
+      <section id="recycleBinSection" class="hidden">
+        <h2>Recycle Bin</h2>
+        <p class="hint">Deleted passwords sync across devices and automatically purge according to the retention set on your phone.</p>
+        <ul id="recycleBinList"></ul>
+        <p id="recycleBinEmptyHint" class="hint hidden">Recycle bin is empty.</p>
       </section>
     </main>
 

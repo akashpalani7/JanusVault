@@ -41,6 +41,11 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        window.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        
         val query = intent.getStringExtra(EXTRA_QUERY) ?: ""
         val isSaveRequest = intent.getBooleanExtra("is_save_request", false)
         val usernameId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_USERNAME_ID)
@@ -56,9 +61,19 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(32), dp(24), dp(24))
+            setPadding(dp(24), dp(72), dp(24), dp(24))
             setBackgroundColor(0xFF1E1E2E.toInt())
         }
+
+        // Branding
+        val topBranding = TextView(this).apply {
+            text = "🛡️ PeerVault"
+            textSize = 14f
+            setTextColor(0xFF8888AA.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(16))
+        }
+        root.addView(topBranding)
 
         // Title
         val titleTv = TextView(this).apply {
@@ -314,6 +329,9 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
             setTextColor(0xFFAAAAAA.toInt())
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setPadding(dp(24), dp(8), dp(24), dp(8))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(16), 0, 0) }
         }
         cancelBtn.setOnClickListener {
             setResult(RESULT_CANCELED)

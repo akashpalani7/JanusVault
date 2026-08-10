@@ -153,6 +153,14 @@ async function requestPhoneApprovalBle(actionLabel: string, syncAuthKey: CryptoK
     });
 
     if (response && response.outcome) {
+      if (response.outcome === 'unreachable' && navigator.userAgent.includes("Mac OS X") && response.error?.includes("NetworkError")) {
+        console.warn("[Ext/Auth] Mac OS BLE NetworkError detected - silently falling back to Wi-Fi");
+        const lastHost = await ExtensionStorage.getLastHost();
+        if (lastHost) {
+          const [host, port] = lastHost.split(":");
+          return await requestPhoneApproval(host, parseInt(port, 10) || 51827, actionLabel, syncAuthKey);
+        }
+      }
       return response.outcome as PhoneAuthOutcome;
     }
     return "unreachable";
@@ -273,6 +281,69 @@ async function findMatchesForDomain(domain: string) {
     }
   }
   return { locked: false, entries: matches };
+}
+
+async function listDeletedEntryMeta(query?: string) {
+  const vek = await getVek();
+  if (!vek) return { locked: true, entries: [] as unknown[] };
+
+  const all = await ExtensionStorage.getAllEntries();
+  const needle = query?.trim().toLowerCase();
+  const results: unknown[] = [];
+  for (const record of all) {
+    if (!record.deleted) continue;
+    const decrypted = await decryptRecord(record);
+    if (!decrypted) continue;
+    if (needle) {
+      const haystack = `${decrypted.websiteName} ${decrypted.websiteUrl} ${decrypted.username}`.toLowerCase();
+      if (!haystack.includes(needle)) continue;
+    }
+    results.push({
+      uuid: decrypted.uuid,
+      websiteName: decrypted.websiteName,
+      websiteUrl: decrypted.websiteUrl,
+      username: decrypted.username,
+    });
+  }
+  results.sort((a, b) => (a as { websiteName: string }).websiteName.localeCompare((b as { websiteName: string }).websiteName));
+  return { locked: false, entries: results };
+}
+
+async function setCredentialDeletedStatus(uuid: string, deleted: boolean) {
+  const vek = await getVek();
+  if (!vek) return { ok: false, reason: "locked" };
+
+  const all = await ExtensionStorage.getAllEntries();
+  const existing = all.find((e) => e.uuid === uuid);
+  if (!existing) return { ok: false, reason: "not_found" };
+
+  const now = new Date().toISOString();
+  const partial = {
+    uuid: existing.uuid,
+    encryptedWebsiteName: existing.encryptedWebsiteName,
+    encryptedWebsiteUrl: existing.encryptedWebsiteUrl,
+    encryptedUsername: existing.encryptedUsername,
+    encryptedPassword: existing.encryptedPassword,
+    createdAt: existing.createdAt,
+    lastUpdated: now,
+    deleted: deleted,
+  };
+  const hash = await recomputeHash(partial);
+  const record: EncryptedEntryRecord = { ...partial, hash };
+
+  await ExtensionStorage.upsertEntries([record]);
+  attemptBackgroundSync();
+  return { ok: true };
+}
+
+async function hardDeleteCredential(uuid: string) {
+  const all = await ExtensionStorage.getAllEntries();
+  const index = all.findIndex((e) => e.uuid === uuid);
+  if (index === -1) return { ok: false, reason: "not_found" };
+  
+  all.splice(index, 1);
+  await ExtensionStorage.saveAllEntries(all);
+  return { ok: true };
 }
 
 /** Reveals one password (for the popup's Copy button) — ALWAYS asks the
@@ -469,7 +540,6 @@ async function completePairing(rawPairingPackage: string, deviceName?: string) {
   const now = new Date().toISOString();
   await ExtensionStorage.saveDeviceLocalKeyRaw(rawLocalKeyBase64);
   await ExtensionStorage.saveWrappedVek(wrappedForStorage);
-  await ExtensionStorage.saveDeviceId(`ext_${Date.now()}`);
   await ExtensionStorage.savePairedAt(now);
   await ExtensionStorage.saveLastSyncedAt(now);
   if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
@@ -491,7 +561,6 @@ async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: n
   const now = new Date().toISOString();
   await ExtensionStorage.saveDeviceLocalKeyRaw(rawLocalKeyBase64);
   await ExtensionStorage.saveWrappedVek(wrappedForStorage);
-  await ExtensionStorage.saveDeviceId(`ext_${Date.now()}`);
   await ExtensionStorage.savePairedAt(now);
   await ExtensionStorage.saveLastSyncedAt(now);
   if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
@@ -509,6 +578,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
       case "LIST_ALL_ENTRIES":
         sendResponse(await listEntryMeta(message.query as string | undefined));
+        break;
+      case "LIST_DELETED_ENTRIES":
+        sendResponse(await listDeletedEntryMeta(message.query as string | undefined));
+        break;
+      case "SET_DELETED_STATUS":
+        sendResponse(await setCredentialDeletedStatus(message.uuid as string, message.deleted as boolean));
+        break;
+      case "HARD_DELETE_CREDENTIAL":
+        sendResponse(await hardDeleteCredential(message.uuid as string));
         break;
       case "REVEAL_PASSWORD":
         sendResponse(await revealPassword(message.uuid as string));

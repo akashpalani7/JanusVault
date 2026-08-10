@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'autofill_entrypoint.dart';
 import 'core/auth/biometric_auth.dart';
 import 'core/storage/vault_database.dart';
+import 'core/vault/vault_repository.dart';
 import 'core/sync/ble_gatt_service.dart';
 import 'core/sync/lan_sync_service.dart';
 import 'features/unlock/setup_screen.dart';
@@ -39,6 +40,11 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterCryptography.enable();
   await VaultDatabase.instance.load();
+  final settings = VaultDatabase.instance.settings;
+  if (settings != null) {
+      // ignore: unawaited_futures
+      VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: settings.recycleBinRetentionDays);
+  }
 
   // Wired up once, globally: any time the browser extension asks this
   // phone to approve revealing/autofilling a password, show an
@@ -47,7 +53,8 @@ Future<void> main() async {
   // screen to prompt on, e.g. mid-cold-start.
   LanSyncService.instance.onAuthPromptRequested = (actionLabel) async {
     final context = rootNavigatorKey.currentContext;
-    final isBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+    final isBackground =
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
 
     if (context == null || isBackground) {
       final completer = Completer<bool>();
@@ -59,8 +66,10 @@ Future<void> main() async {
           }
         }
       });
-      await channel.invokeMethod('showApprovalNotification', {'actionLabel': actionLabel});
-      return completer.future.timeout(const Duration(seconds: 55), onTimeout: () => false);
+      await channel.invokeMethod(
+          'showApprovalNotification', {'actionLabel': actionLabel});
+      return completer.future
+          .timeout(const Duration(seconds: 55), onTimeout: () => false);
     }
 
     final wantsToApprove = await showDialog<bool>(
@@ -90,12 +99,14 @@ Future<void> main() async {
 
   LanSyncService.instance.onPairingRequested = (deviceName, pin) async {
     final context = rootNavigatorKey.currentContext;
-    final isBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
-    
+    final isBackground =
+        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+
     if (context == null || isBackground) {
       // In the future, we could add a `showPairingNotification` channel, but for now we must explicitly fail
       // so the PC doesn't hang!
-      throw Exception("Cannot authorize new device pairing while the app is in the background. Please open PeerVault on your phone and try again.");
+      throw Exception(
+          "Cannot authorize new device pairing while the app is in the background. Please open PeerVault on your phone and try again.");
     }
 
     final wantsToApprove = await showDialog<bool>(

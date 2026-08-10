@@ -4,21 +4,18 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
-    android:paddingLeft="10dp"
-    android:paddingTop="5dp"
-    android:paddingRight="10dp"
-    android:paddingBottom="5dp"
+    android:padding="12dp"
     android:gravity="center_vertical">
 
     <ImageView
         android:id="@+id/icon"
-        android:layout_width="20dp"
-        android:layout_height="20dp"
-        android:layout_gravity="center"
-        android:layout_marginEnd="10dp"
-        android:adjustViewBounds="true"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginEnd="16dp"
         android:src="@android:drawable/ic_secure"
-        android:contentDescription="@null" />
+        app:tint="?android:attr/colorAccent"
+        android:contentDescription="@null"
+        xmlns:app="http://schemas.android.com/apk/res-auto" />
 
     <LinearLayout
         android:layout_width="wrap_content"
@@ -30,16 +27,17 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textStyle="bold"
-            android:textSize="14sp"
-            android:textColor="#FF000000"
+            android:textSize="16sp"
+            android:textColor="?android:attr/textColorPrimary"
             android:text="Unlock PeerVault" />
 
         <TextView
             android:id="@+id/subtitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:textColor="#FF555555"
+            android:textSize="14sp"
+            android:layout_marginTop="2dp"
+            android:textColor="?android:attr/textColorSecondary"
             android:text="Tap to see your passwords" />
     </LinearLayout>
 </LinearLayout>

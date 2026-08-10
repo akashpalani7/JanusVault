@@ -39,8 +39,8 @@ object ApprovalNotifier {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("System requested to fill a password")
-            .setContentText("Tap here to remotely autofill from PeerVault")
+            .setContentTitle(actionLabel)
+            .setContentText("Tap to remotely approve from PeerVault")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)

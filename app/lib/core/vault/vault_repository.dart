@@ -115,6 +115,10 @@ class VaultRepository {
     return _db.deleteEntriesWhere((r) => r.deleted && r.deletedAt != null && r.deletedAt!.isBefore(cutoff));
   }
 
+  Future<void> hardDeleteEntry(String uuid) async {
+    await _db.deleteEntriesWhere((r) => r.uuid == uuid);
+  }
+
   // ---------------------------------------------------------------------
   // internal helpers
   // ---------------------------------------------------------------------

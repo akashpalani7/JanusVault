@@ -37,38 +37,48 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.shield, size: 72),
-              const SizedBox(height: 16),
-              Text('Welcome to PeerVault', style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 8),
-              const Text(
-                'No cloud account. No master password to remember.\n'
-                'Your vault lives on your devices and is protected by your phone\'s biometrics.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 32),
-              if (_creating)
-                const CircularProgressIndicator()
-              else ...[
-                FilledButton(
-                  onPressed: _createVault,
-                  child: const Text('Create my vault'),
-                ),
-                const SizedBox(height: 16),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const RecoveryScreen())
+          child: Card(
+            elevation: 4,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.shield, size: 72, color: Colors.indigo),
+                  const SizedBox(height: 16),
+                  Text('Welcome to PeerVault', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.indigo), textAlign: TextAlign.center),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No cloud account. No master password to remember.\n\n'
+                    'Your vault lives on your devices and is protected by your phone\'s biometrics.',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.grey.shade700),
                   ),
-                  icon: const Icon(Icons.settings_backup_restore),
-                  label: const Text('Recover using Recovery Kit'),
-                ),
-              ],
-            ],
+                  const SizedBox(height: 32),
+                  if (_creating)
+                    const CircularProgressIndicator()
+                  else ...[
+                    FilledButton(
+                      onPressed: _createVault,
+                      style: FilledButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                      child: const Text('Create my vault'),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).pushReplacement(
+                        MaterialPageRoute(builder: (_) => const RecoveryScreen())
+                      ),
+                      icon: const Icon(Icons.settings_backup_restore),
+                      label: const Text('Recover using Recovery Kit'),
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),

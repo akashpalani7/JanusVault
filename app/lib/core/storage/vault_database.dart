@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -181,6 +182,32 @@ class VaultDatabase {
   bool _loaded = false;
   Future<void> _writeQueue = Future.value();
 
+  DateTime? _lastDiskModification;
+  Timer? _pollTimer;
+  bool _isUpdating = false;
+  final List<void Function()> _listeners = [];
+
+  void addListener(void Function() listener) => _listeners.add(listener);
+
+  void _startPolling() {
+    _pollTimer ??= Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_isUpdating) return;
+      try {
+        final file = await _file();
+        if (!await file.exists()) return;
+        final stat = await file.stat();
+        if (_lastDiskModification != null && stat.modified.isAfter(_lastDiskModification!)) {
+          _isUpdating = true;
+          await load(force: true);
+          for (final l in _listeners) { l(); }
+          _isUpdating = false;
+        }
+      } catch (_) {
+        _isUpdating = false;
+      }
+    });
+  }
+
   Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}/peervault_db.json');
@@ -190,10 +217,19 @@ class VaultDatabase {
     if (_loaded && !force) return;
     _loaded = true;
     final file = await _file();
-    if (!await file.exists()) return;
+    if (!await file.exists()) {
+      _startPolling();
+      return;
+    }
 
     final raw = await file.readAsString();
-    if (raw.trim().isEmpty) return;
+    final stat = await file.stat();
+    _lastDiskModification = stat.modified;
+
+    if (raw.trim().isEmpty) {
+      _startPolling();
+      return;
+    }
     final json = jsonDecode(raw) as Map<String, dynamic>;
 
     _entries
@@ -206,12 +242,15 @@ class VaultDatabase {
       ..clear()
       ..addAll((json['kits'] as List<dynamic>? ?? []).map((e) => RecoveryKitRecord.fromJson(e as Map<String, dynamic>)));
     _settings = json['settings'] == null ? null : VaultSettingsRecord.fromJson(json['settings'] as Map<String, dynamic>);
+    
+    _startPolling();
   }
 
   /// Persists the current in-memory state to disk. Calls are chained onto
   /// [_writeQueue] so overlapping saves can't race and corrupt the file.
   Future<void> _persist() {
     _writeQueue = _writeQueue.then((_) async {
+      _isUpdating = true;
       final file = await _file();
       final json = {
         'entries': _entries.map((e) => e.toJson()).toList(),
@@ -224,6 +263,8 @@ class VaultDatabase {
       final tempFile = File('${file.path}.tmp');
       await tempFile.writeAsString(jsonEncode(json), flush: true);
       await tempFile.rename(file.path);
+      _lastDiskModification = (await file.stat()).modified;
+      _isUpdating = false;
     });
     return _writeQueue;
   }

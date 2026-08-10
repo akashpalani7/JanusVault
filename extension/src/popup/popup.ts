@@ -42,6 +42,7 @@ const mainNav = document.getElementById("mainNav") as HTMLElement;
 const navPasswords = document.getElementById("navPasswords") as HTMLButtonElement;
 const navDevices = document.getElementById("navDevices") as HTMLButtonElement;
 const navImport = document.getElementById("navImport") as HTMLButtonElement;
+const navRecycleBin = document.getElementById("navRecycleBin") as HTMLButtonElement;
 
 const devicesSection = document.getElementById("devicesSection") as HTMLElement;
 const devicesList = document.getElementById("devicesList") as HTMLUListElement;
@@ -51,6 +52,10 @@ const importSection = document.getElementById("importSection") as HTMLElement;
 const importFileInput = document.getElementById("importFileInput") as HTMLInputElement;
 const importStatus = document.getElementById("importStatus") as HTMLParagraphElement;
 
+const recycleBinSection = document.getElementById("recycleBinSection") as HTMLElement;
+const recycleBinList = document.getElementById("recycleBinList") as HTMLUListElement;
+const recycleBinEmptyHint = document.getElementById("recycleBinEmptyHint") as HTMLParagraphElement;
+
 const showAddEntryButton = document.getElementById("showAddEntryButton") as HTMLButtonElement;
 const addEntrySection = document.getElementById("addEntrySection") as HTMLElement;
 const newWebsiteInput = document.getElementById("newWebsiteInput") as HTMLInputElement;
@@ -59,6 +64,10 @@ const newUsernameInput = document.getElementById("newUsernameInput") as HTMLInpu
 const newPasswordInput = document.getElementById("newPasswordInput") as HTMLInputElement;
 const newPasswordLengthSlider = document.getElementById("newPasswordLengthSlider") as HTMLInputElement;
 const newPasswordLengthLabel = document.getElementById("newPasswordLengthLabel") as HTMLParagraphElement;
+const genUppercase = document.getElementById("genUppercase") as HTMLInputElement;
+const genLowercase = document.getElementById("genLowercase") as HTMLInputElement;
+const genNumbers = document.getElementById("genNumbers") as HTMLInputElement;
+const genSymbols = document.getElementById("genSymbols") as HTMLInputElement;
 const regeneratePasswordButton = document.getElementById("regeneratePasswordButton") as HTMLButtonElement;
 const saveNewEntryButton = document.getElementById("saveNewEntryButton") as HTMLButtonElement;
 const cancelAddEntryButton = document.getElementById("cancelAddEntryButton") as HTMLButtonElement;
@@ -89,28 +98,28 @@ async function refreshStatus() {
   mainNav.classList.toggle("hidden", !paired);
   phoneSection.classList.toggle("hidden", !paired);
   pairNewDeviceSection.classList.toggle("hidden", !paired);
-  if (paired) {
-    showView("passwords");
-    await runSearch("");
-  }
 }
 
-type ViewName = "passwords" | "devices" | "import";
+type ViewName = "passwords" | "devices" | "import" | "recycleBin";
 
 function showView(view: ViewName) {
   searchView.classList.toggle("hidden", view !== "passwords");
   addEntrySection.classList.add("hidden"); // always closed when switching views
   devicesSection.classList.toggle("hidden", view !== "devices");
   importSection.classList.toggle("hidden", view !== "import");
-  for (const [btn, name] of [[navPasswords, "passwords"], [navDevices, "devices"], [navImport, "import"]] as const) {
+  recycleBinSection.classList.toggle("hidden", view !== "recycleBin");
+  for (const [btn, name] of [[navPasswords, "passwords"], [navDevices, "devices"], [navImport, "import"], [navRecycleBin, "recycleBin"]] as const) {
     btn.classList.toggle("active", name === view);
   }
   if (view === "devices") renderDevices();
+  if (view === "recycleBin") renderRecycleBin();
+  if (view === "passwords" && statusEl.textContent !== "not paired") runSearch(searchInput.value);
 }
 
 navPasswords.addEventListener("click", () => showView("passwords"));
 navDevices.addEventListener("click", () => showView("devices"));
 navImport.addEventListener("click", () => showView("import"));
+navRecycleBin.addEventListener("click", () => showView("recycleBin"));
 
 interface KnownDevice {
   deviceId: string;
@@ -176,7 +185,18 @@ function renderEntries(entries: EntryMeta[]) {
     editButton.title = "Ask your phone to approve editing this entry";
     editButton.addEventListener("click", () => handleEdit(entry, editButton));
 
-    actions.append(fillButton, copyButton, editButton);
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "secondary";
+    deleteButton.textContent = "Delete";
+    deleteButton.title = "Move to recycle bin";
+    deleteButton.addEventListener("click", async () => {
+      deleteButton.disabled = true;
+      syncStatus.textContent = `Moved to recycle bin.`;
+      await chrome.runtime.sendMessage({ type: "SET_DELETED_STATUS", uuid: entry.uuid, deleted: true });
+      await runSearch(searchInput.value);
+    });
+
+    actions.append(fillButton, copyButton, editButton, deleteButton);
     li.append(info, actions);
     resultsList.appendChild(li);
   }
@@ -244,6 +264,99 @@ async function handleEdit(entry: EntryMeta, button: HTMLButtonElement) {
 async function runSearch(query: string) {
   const response = await chrome.runtime.sendMessage({ type: "LIST_ALL_ENTRIES", query });
   renderEntries((response?.entries ?? []) as EntryMeta[]);
+}
+
+async function renderRecycleBin() {
+  const response = await chrome.runtime.sendMessage({ type: "LIST_DELETED_ENTRIES", query: "" });
+  const entries = (response?.entries ?? []) as EntryMeta[];
+  
+  document.querySelectorAll(".kebab-dropdown").forEach(el => el.remove());
+  recycleBinList.innerHTML = "";
+  recycleBinEmptyHint.classList.toggle("hidden", entries.length > 0);
+
+  for (const entry of entries) {
+    const li = document.createElement("li");
+
+    const info = document.createElement("div");
+    info.className = "entry-info";
+    const title = document.createElement("div");
+    title.className = "entry-title";
+    title.textContent = entry.websiteName || entry.websiteUrl || "Untitled";
+    const subtitle = document.createElement("div");
+    subtitle.className = "entry-subtitle";
+    subtitle.textContent = entry.username || "(no username)";
+    info.append(title, subtitle);
+
+    const actions = document.createElement("div");
+    actions.className = "entry-actions kebab-menu";
+
+    const kebabBtn = document.createElement("button");
+    kebabBtn.className = "kebab-btn";
+    kebabBtn.innerHTML = "&#8942;"; 
+    
+    const dropdown = document.createElement("div");
+    dropdown.className = "kebab-dropdown hidden";
+    
+    kebabBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isHidden = dropdown.classList.contains("hidden");
+      
+      document.querySelectorAll(".kebab-dropdown").forEach((el) => el.classList.add("hidden"));
+      
+      if (isHidden) {
+        const rect = kebabBtn.getBoundingClientRect();
+        const popupHeight = window.innerHeight;
+        
+        dropdown.style.position = "fixed";
+        dropdown.style.right = `${document.body.clientWidth - rect.right}px`;
+        
+        dropdown.classList.remove("drop-up", "drop-down");
+        if (rect.bottom > popupHeight - 95) {
+          dropdown.classList.add("drop-up");
+          dropdown.style.top = "auto";
+          dropdown.style.bottom = `${popupHeight - rect.top + 4}px`;
+        } else {
+          dropdown.classList.add("drop-down");
+          dropdown.style.bottom = "auto";
+          dropdown.style.top = `${rect.bottom + 4}px`;
+        }
+        dropdown.classList.remove("hidden");
+      }
+    });
+    
+    document.addEventListener("click", () => {
+      document.querySelectorAll(".kebab-dropdown").forEach((el) => el.classList.add("hidden"));
+    });
+
+    const restoreButton = document.createElement("button");
+    restoreButton.className = "kebab-dropdown-item";
+    restoreButton.textContent = "Restore";
+    restoreButton.addEventListener("click", async () => {
+      dropdown.classList.add("hidden");
+      const res = await chrome.runtime.sendMessage({ type: "SET_DELETED_STATUS", uuid: entry.uuid, deleted: false });
+      if (res.ok) {
+        await renderRecycleBin();
+      }
+    });
+
+    const eraseButton = document.createElement("button");
+    eraseButton.className = "kebab-dropdown-item text-red";
+    eraseButton.textContent = "Erase permanently";
+    eraseButton.addEventListener("click", async () => {
+      dropdown.classList.add("hidden");
+      if (!confirm("Delete permanently? This cannot be undone.")) return;
+      const res = await chrome.runtime.sendMessage({ type: "HARD_DELETE_CREDENTIAL", uuid: entry.uuid });
+      if (res.ok) {
+        await renderRecycleBin();
+      }
+    });
+
+    dropdown.append(restoreButton, eraseButton);
+    actions.append(kebabBtn);
+    document.body.appendChild(dropdown);
+    li.append(info, actions);
+    recycleBinList.appendChild(li);
+  }
 }
 
 searchInput.addEventListener("input", () => runSearch(searchInput.value));
@@ -455,12 +568,23 @@ ExtensionStorage.getLastHost().then((host) => {
 // Add new entry + password generator
 // ---------------------------------------------------------------------
 
-/** Same rejection-sampled generator as content/detect.ts's new-password
- * suggestion — duplicated rather than shared because the popup and
- * content-script bundles are compiled independently and this is a dozen
- * lines, not worth a shared-chunk build step for. */
 function generateStrongPassword(length: number): string {
-  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_=+";
+  const upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const lower = "abcdefghijklmnopqrstuvwxyz";
+  const numbers = "0123456789";
+  const symbols = "!@#$%^&*-_=+";
+  
+  let charset = "";
+  if (genUppercase.checked) charset += upper;
+  if (genLowercase.checked) charset += lower;
+  if (genNumbers.checked) charset += numbers;
+  if (genSymbols.checked) charset += symbols;
+  
+  if (!charset) {
+    charset = lower; // fallback if user unchecked all
+    genLowercase.checked = true;
+  }
+
   const cutoff = 256 - (256 % charset.length);
   const buf = new Uint8Array(1);
   let result = "";
@@ -490,6 +614,10 @@ showAddEntryButton.addEventListener("click", () => {
 });
 
 newPasswordLengthSlider.addEventListener("input", refreshGeneratedPassword);
+genUppercase.addEventListener("change", refreshGeneratedPassword);
+genLowercase.addEventListener("change", refreshGeneratedPassword);
+genNumbers.addEventListener("change", refreshGeneratedPassword);
+genSymbols.addEventListener("change", refreshGeneratedPassword);
 regeneratePasswordButton.addEventListener("click", refreshGeneratedPassword);
 
 cancelAddEntryButton.addEventListener("click", () => {
@@ -594,6 +722,9 @@ importFileInput.addEventListener("change", async () => {
     return;
   }
 
+  const listResponse = await chrome.runtime.sendMessage({ type: "LIST_ALL_ENTRIES", query: "" });
+  const existingEntries = (listResponse?.entries ?? []) as EntryMeta[];
+
   let saved = 0;
   let skipped = 0;
   const dataRows = rows.slice(1);
@@ -613,6 +744,12 @@ importFileInput.addEventListener("change", async () => {
       // Not a full URL (some exports just have a bare domain) — use as-is.
     }
     const websiteName = nameIdx !== -1 && cols[nameIdx]?.trim() ? cols[nameIdx].trim() : domain;
+    
+    if (existingEntries.some(e => (e.websiteName === websiteName || e.websiteUrl === url || e.websiteUrl === domain) && e.username === username)) {
+      skipped++;
+      continue;
+    }
+    
     const response = await chrome.runtime.sendMessage({
       type: "CAPTURE_CREDENTIAL",
       domain: websiteName || domain,

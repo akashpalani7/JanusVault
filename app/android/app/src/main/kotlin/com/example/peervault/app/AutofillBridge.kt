@@ -122,9 +122,9 @@ object AutofillBridge {
 
     /** Starts the LAN sync listener — see _startSyncListening in
      * autofill_entrypoint.dart. Called by PeerVaultSyncForegroundService. */
-    suspend fun startSyncListening(context: Context, displayName: String) {
+    suspend fun startSyncListening(context: Context, displayName: String, bluetoothEnabled: Boolean) {
         ensureReady(context)
-        invoke("startSyncListening", mapOf("displayName" to displayName))
+        invoke("startSyncListening", mapOf("displayName" to displayName, "bluetoothEnabled" to bluetoothEnabled))
     }
 
     suspend fun stopSyncListening(context: Context) {

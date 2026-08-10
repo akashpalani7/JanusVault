@@ -53,8 +53,12 @@ class PeerVaultSyncForegroundService : Service() {
                 // Auto-enable Bluetooth if it's currently off
                 ensureBluetoothOn()
 
+                // Check final bluetooth state to avoid intrusive OS dialogs from the Flutter plugin
+                val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                val isBluetoothOn = btManager?.adapter?.isEnabled == true
+
                 // Start both LAN and BLE listeners
-                AutofillBridge.startSyncListening(applicationContext, deviceName())
+                AutofillBridge.startSyncListening(applicationContext, deviceName(), isBluetoothOn)
                 
                 // Auto turn off listening in 120 seconds to prevent battery drain
                 kotlinx.coroutines.delay(120_000L)
@@ -107,18 +111,10 @@ class PeerVaultSyncForegroundService : Service() {
             val adapter = btManager.adapter ?: return
 
             if (!adapter.isEnabled) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    // Android 13+ (API 33): Cannot programmatically enable Bluetooth.
-                    // Log a warning — BLE won't work unless user turns it on manually.
-                    android.util.Log.w("PeerVault", "Bluetooth is off. On Android 13+, it must be enabled manually. BLE sync will be unavailable.")
-                    updateNotification("PeerVault listening (⚠ Bluetooth off — enable it manually for BLE sync)")
-                } else {
-                    // API < 33: We can programmatically enable Bluetooth
-                    val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    prefs.edit().putBoolean(KEY_BT_WAS_OFF, true).apply()
-                    adapter.enable()
-                    android.util.Log.i("PeerVault", "Bluetooth turned ON by PeerVault (will be turned off when listening stops)")
-                }
+                val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                prefs.edit().putBoolean(KEY_BT_WAS_OFF, true).apply()
+                adapter.enable()
+                android.util.Log.i("PeerVault", "Bluetooth turned ON by PeerVault (will be turned off when listening stops)")
             } else {
                 // Bluetooth was already on — don't touch it on shutdown
                 val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -144,7 +140,7 @@ class PeerVaultSyncForegroundService : Service() {
             if (weTurnedItOn) {
                 val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return
                 val adapter = btManager.adapter ?: return
-                if (adapter.isEnabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                if (adapter.isEnabled) {
                     adapter.disable()
                     android.util.Log.i("PeerVault", "Bluetooth turned OFF by PeerVault (was turned on by us)")
                 }
@@ -163,7 +159,7 @@ class PeerVaultSyncForegroundService : Service() {
     private fun buildNotification(text: String = "Ready for sync and approval requests from your paired devices.") =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("PeerVault is listening")
+            .setContentTitle("PeerVault Listener")
             .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -178,7 +174,7 @@ class PeerVaultSyncForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(CHANNEL_ID, "PeerVault background listening", NotificationManager.IMPORTANCE_LOW).apply {
+        val channel = NotificationChannel(CHANNEL_ID, "PeerVault Listener", NotificationManager.IMPORTANCE_LOW).apply {
             description = "Shown while PeerVault is listening for sync/approval requests in the background."
         }
         manager.createNotificationChannel(channel)

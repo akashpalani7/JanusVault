@@ -38,7 +38,12 @@ flutter pub get
 # Connect your physical Android Device
 flutter run --release
 ```
-**Enable Native Autofill**: After installing, go to Android **Settings -> Passwords & Accounts -> Autofill Service**, and select `PeerVault` to activate seamless OS autofill across your apps and mobile browsers! and if the browser has seperate setting for autofill service(like brave) make sure to change it to Android's AutoFill Service!
+**Enable Native Autofill**: 
+  1. After installing, go to Android **Settings -> Passwords & Accounts -> Autofill Service**, and select `PeerVault` to activate seamless OS autofill across your apps and mobile browsers! and if the browser has seperate setting for autofill service(like brave) make sure to change it to Android's AutoFill Service!
+
+  2. Select the android's autofill service as default in your browser(chrome/brave) so that it redirects to the default autofill service(PeerVault).
+
+**Important System Step (macOS LAN Sync):** If using macOS, you must manually go to **System Settings > Privacy & Security > Local Network** and ensure the browser (Chrome/Brave) is toggled ON, otherwise macOS drops the connection payload silently.
 
 ### 2. Required Chrome Flags (Experimental Features)
 To ensure the Web Bluetooth API can connect flawlessly from an Offscreen DOM to your Android device via BLE GATT, you need to enable experimental platform features.

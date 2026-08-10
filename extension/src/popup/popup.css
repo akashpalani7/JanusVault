@@ -29,27 +29,25 @@ main {
   padding: 12px 16px;
 }
 
-textarea {
+textarea, input[type="text"] {
   width: 100%;
   box-sizing: border-box;
   padding: 8px;
   border: 1px solid #ccc;
   border-radius: 6px;
   margin-bottom: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  background-color: #ffffff;
+  color: #1a1a2e;
+}
+
+textarea {
   font-family: monospace;
   font-size: 11px;
 }
 
-input[type="text"] {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 6px;
-  margin-bottom: 8px;
-}
-
-ul#resultsList {
+ul#resultsList, ul#recycleBinList {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -57,7 +55,7 @@ ul#resultsList {
   overflow-y: auto;
 }
 
-ul#resultsList li {
+ul#resultsList li, ul#recycleBinList li {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -65,17 +63,17 @@ ul#resultsList li {
   border-radius: 6px;
 }
 
-ul#resultsList li:hover {
+ul#resultsList li:hover, ul#recycleBinList li:hover {
   background: #e8e8f5;
 }
 
-ul#resultsList .entry-info {
+ul#resultsList .entry-info, ul#recycleBinList .entry-info {
   flex: 1;
   min-width: 0;
   cursor: default;
 }
 
-ul#resultsList .entry-title {
+ul#resultsList .entry-title, ul#recycleBinList .entry-title {
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
@@ -83,7 +81,7 @@ ul#resultsList .entry-title {
   text-overflow: ellipsis;
 }
 
-ul#resultsList .entry-subtitle {
+ul#resultsList .entry-subtitle, ul#recycleBinList .entry-subtitle {
   font-size: 11px;
   color: #666;
   white-space: nowrap;
@@ -91,13 +89,13 @@ ul#resultsList .entry-subtitle {
   text-overflow: ellipsis;
 }
 
-ul#resultsList .entry-actions {
+ul#resultsList .entry-actions, ul#recycleBinList .entry-actions {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
 }
 
-ul#resultsList .entry-actions button {
+ul#resultsList .entry-actions button, ul#recycleBinList .entry-actions button {
   width: auto;
   margin-top: 0;
   padding: 6px 8px;
@@ -105,7 +103,7 @@ ul#resultsList .entry-actions button {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .hint {
@@ -197,4 +195,86 @@ input[type="range"] {
 
 #phoneSection .hint {
   margin-bottom: 8px;
+}
+
+#addEntrySection {
+  background-color: #ffffff;
+  color: #1a1a2e;
+  position: relative;
+  z-index: 100;
+  padding: 16px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  margin-top: 12px;
+}
+
+.kebab-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.kebab-btn {
+  background: transparent !important;
+  border: none;
+  cursor: pointer;
+  padding: 4px 12px !important;
+  color: #1a1a2e !important;
+  border-radius: 4px;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px !important;
+  font-weight: 900;
+  line-height: 0.8 !important;
+  margin: 0 !important;
+}
+
+.kebab-btn:hover {
+  background: #f0f0f0 !important;
+}
+
+.kebab-dropdown {
+  position: absolute;
+  right: 0;
+  background: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  min-width: 120px;
+  z-index: 1000;
+}
+
+.kebab-dropdown.drop-up {
+  top: auto;
+  bottom: 100%;
+}
+
+.kebab-dropdown.drop-down {
+  top: 100%;
+  bottom: auto;
+}
+
+.kebab-dropdown button {
+  width: 100%;
+  border-radius: 0;
+  margin: 0;
+  background: transparent;
+  color: #1a1a2e;
+  text-align: left;
+  padding: 8px 12px;
+}
+
+.kebab-dropdown button:hover {
+  background: #f0f0f5;
+}
+
+.kebab-dropdown button.danger {
+  color: #c0392b;
+}
+
+.kebab-dropdown button.danger:hover {
+  background: #fde8e8;
 }

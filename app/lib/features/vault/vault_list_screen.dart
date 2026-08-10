@@ -10,6 +10,7 @@ import '../recovery/recovery_screen.dart';
 import '../settings/settings_screen.dart';
 import '../sync/sync_screen.dart';
 import 'entry_editor_screen.dart';
+import 'recycle_bin_screen.dart';
 
 class VaultListScreen extends ConsumerStatefulWidget {
   const VaultListScreen({super.key});
@@ -53,6 +54,7 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(dbListenerProvider);
     final entriesAsync = ref.watch(filteredEntriesProvider);
 
     return Scaffold(
@@ -78,6 +80,11 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Recycle Bin',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecycleBinScreen())),
           ),
           IconButton(
             icon: const Icon(Icons.lock),

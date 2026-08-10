@@ -72,3 +72,14 @@ PeerVault uses dual-transport for reliability. Let's test the fallback system:
 1. Manually type a brand new, random password into the signup form of a mobile website and hit "Submit" or "Log In" on the website.
 2. Verify that Android natively pops up a bottom sheet asking: **"Save credentials for [Website]?"** 
 3. *The Lock Test*: If PeerVault locked itself in the background while you were typing, clicking "Save" on that bottom sheet should immediately pop up a Biometric Fingerprint prompt. Once unlocked, a small native Toast message should appear at the bottom of your screen saying "Saved to PeerVault!".
+
+---
+
+## 6️⃣ Troubleshooting & Testing Configurations
+
+**Extension Testing (Disabling Built-in Browser Autofill)**
+To properly evaluate the PeerVault browser extension without UI glitches, you must disable the browser's native password manager:
+* **Chrome / Brave / Edge:** Go to **Settings > Autofill and passwords > Password Manager > Settings**. Toggle OFF **"Offer to save passwords"** and **"Auto Sign-in"**.
+
+**macOS LAN Sync Failing**
+If you are testing on macOS and the browser extension fails to connect to the phone over Wi-Fi, macOS is likely blocking local network bridging. You must manually go to **System Settings > Privacy & Security > Local Network** and ensure your browser (Chrome/Brave/Edge) is toggled ON. Without this exception, macOS will silently drop the payload.

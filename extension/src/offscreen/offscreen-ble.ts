@@ -131,19 +131,12 @@ async function executeBleAuth(actionLabel: string, requestId: string, authKeyRaw
     });
 }
 
-async function connectToAuthorizedDevice(): Promise<{
+async function connectToDevice(paired: BluetoothDevice): Promise<{
     device: BluetoothDevice;
     char: BluetoothRemoteGATTCharacteristic;
 }> {
-    const devices = await navigator.bluetooth.getDevices();
-    // In Chrome MV3, after an extension reload, cached devices returned by getDevices() 
-    // often have a null 'name' property until they actually connect and re-exchange GAP info.
-    // If we only grant permissions to PeerVault devices during pairing, any device here is ours.
-    const paired = devices.length > 0 ? devices[0] : undefined;
-    if (!paired) throw new Error('No previously paired PeerVault device found.');
-
     if (!paired.gatt!.connected) {
-        console.log("[Ext/BLE] Device not connected, starting watchAdvertisements to handle potential MAC roll...");
+        console.log(`[Ext/BLE] Device ${paired.id} not connected, handling potential MAC roll...`);
         const abortController = new AbortController();
 
         try {
@@ -154,17 +147,19 @@ async function connectToAuthorizedDevice(): Promise<{
                 }, { once: true, signal: abortController.signal });
             });
 
-            // @ts-ignore - TS might not have WebBluetooth watchAdvertisements types fully spec'd
-            await paired.watchAdvertisements({ signal: abortController.signal });
+            try {
+                // @ts-ignore
+                await paired.watchAdvertisements({ signal: abortController.signal });
+            } catch(e) {
+                console.warn("[Ext/BLE] macOS watchAdvertisements missing/failed:", e);
+            }
 
-            // Wait up to 3 seconds for an advertisement to refresh the cache.
-            // If it times out, we'll try connecting directly anyway.
             await Promise.race([
                 adPromise,
                 new Promise((_, reject) => setTimeout(() => reject(new Error("Ad timeout")), 3000))
             ]);
         } catch (e) {
-            console.warn("[Ext/BLE] watchAdvertisements timed out or failed:", e);
+            console.warn("[Ext/BLE] initial ad check timed out or failed:", e);
         } finally {
             abortController.abort(); // clean up the scanner
         }
@@ -198,93 +193,141 @@ async function connectToAuthorizedDevice(): Promise<{
     return { device: paired, char };
 }
 
-async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{ ok: boolean, pulled: number, pushed: number }> {
-    incomingBuffer = '';
-    const { device, char } = await connectToAuthorizedDevice();
-
-    return new Promise(async (resolve, reject) => {
-        let inboundBuffer = "";
-        let closing = false;
-        let writeQueue: (() => Promise<void>)[] = [];
-        let isWriting = false;
-
-        const processWriteQueue = async () => {
-            if (isWriting) return;
-            isWriting = true;
-            try {
-                while (writeQueue.length > 0) {
-                    const task = writeQueue.shift();
-                    if (task) await task();
-                }
-            } finally {
-                isWriting = false;
-            }
-        };
-
-        const transport: SyncTransport = {
-            send: (msg) => {
-                return new Promise((resolve, reject) => {
-                    writeQueue.push(async () => {
-                        try {
-                            const encoder = new TextEncoder();
-                            const bytes = encoder.encode(msg + EOM_MARKER);
-                            const chunkSize = 480;
-                            for (let i = 0; i < bytes.length; i += chunkSize) {
-                                const end = Math.min(i + chunkSize, bytes.length);
-                                const chunk = bytes.slice(i, end);
-                                await char.writeValue(chunk);
-                            }
-                            resolve();
-                        } catch (e) {
-                            reject(e);
-                        }
-                    });
-                    processWriteQueue();
-                });
-            },
-            close: () => {
-                closing = true;
-                if (device.gatt?.connected) device.gatt.disconnect();
-            },
-            onMessage: null,
-            onError: null,
-        };
-
-        char.addEventListener('characteristicvaluechanged', (event: any) => {
-            const dataView = event.target.value;
-            const text = new TextDecoder().decode(dataView);
-            inboundBuffer += text;
-
-            while (inboundBuffer.includes(EOM_MARKER)) {
-                const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
-                const fullMessage = inboundBuffer.substring(0, eomIdx);
-                inboundBuffer = inboundBuffer.substring(eomIdx + 1);
-
-                transport.onMessage?.(fullMessage);
-            }
-        });
-
-        device.addEventListener('gattserverdisconnected', () => {
-            if (closing) return;
-            const err = new Error("BLE connection unexpectedly disconnected");
-            if (transport.onError) transport.onError(err);
-            else reject(err);
-        });
-
+async function connectToAuthorizedDevice(): Promise<{
+    device: BluetoothDevice;
+    char: BluetoothRemoteGATTCharacteristic;
+}> {
+    const devices = await navigator.bluetooth.getDevices();
+    if (devices.length === 0) throw new Error('No previously paired PeerVault device found.');
+    let lastErr;
+    for (const dev of devices) {
         try {
-            await char.startNotifications();
-            await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time
+            return await connectToDevice(dev);
         } catch (e) {
-            reject(e);
-            return;
+            lastErr = e;
         }
+    }
+    throw lastErr || new Error("Failed to connect to any paired device");
+}
 
-        const vek = await crypto.subtle.importKey("raw", Uint8Array.from(vekRaw), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
-        runSyncProtocol(transport, vek,
-            (res) => resolve({ ok: true, pulled: res.pulled, pushed: res.pushed }),
-            (err) => reject(err)
-        );
-    });
+async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{ ok: boolean, pulled: number, pushed: number }> {
+    const devices = await navigator.bluetooth.getDevices();
+    if (devices.length === 0) throw new Error('No previously paired PeerVault device found.');
+
+    let totalPulled = 0;
+    let totalPushed = 0;
+    let successCount = 0;
+    let lastErr;
+
+    for (const paired of devices) {
+        try {
+            incomingBuffer = '';
+            const { device, char } = await connectToDevice(paired);
+
+            await new Promise<void>(async (resolve, reject) => {
+                let inboundBuffer = "";
+                let closing = false;
+                let writeQueue: (() => Promise<void>)[] = [];
+                let isWriting = false;
+
+                const processWriteQueue = async () => {
+                    if (isWriting) return;
+                    isWriting = true;
+                    try {
+                        while (writeQueue.length > 0) {
+                            const task = writeQueue.shift();
+                            if (task) await task();
+                        }
+                    } finally {
+                        isWriting = false;
+                    }
+                };
+
+                const transport: SyncTransport = {
+                    send: (msg) => {
+                        return new Promise((res, rej) => {
+                            writeQueue.push(async () => {
+                                try {
+                                    const encoder = new TextEncoder();
+                                    const bytes = encoder.encode(msg + EOM_MARKER);
+                                    const chunkSize = 480;
+                                    for (let i = 0; i < bytes.length; i += chunkSize) {
+                                        const end = Math.min(i + chunkSize, bytes.length);
+                                        const chunk = bytes.slice(i, end);
+                                        await char.writeValue(chunk);
+                                    }
+                                    res();
+                                } catch (e) {
+                                    rej(e);
+                                }
+                            });
+                            processWriteQueue();
+                        });
+                    },
+                    close: () => {
+                        closing = true;
+                        if (device.gatt?.connected) device.gatt.disconnect();
+                    },
+                    onMessage: null,
+                    onError: null,
+                };
+
+                const changeListener = (event: any) => {
+                    const dataView = event.target.value;
+                    const text = new TextDecoder().decode(dataView);
+                    inboundBuffer += text;
+
+                    while (inboundBuffer.includes(EOM_MARKER)) {
+                        const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
+                        const fullMessage = inboundBuffer.substring(0, eomIdx);
+                        inboundBuffer = inboundBuffer.substring(eomIdx + 1);
+                        transport.onMessage?.(fullMessage);
+                    }
+                };
+
+                const disconnectListener = () => {
+                    if (closing) return;
+                    const err = new Error("BLE connection unexpectedly disconnected");
+                    if (transport.onError) transport.onError(err);
+                    else reject(err);
+                };
+
+                char.addEventListener('characteristicvaluechanged', changeListener);
+                device.addEventListener('gattserverdisconnected', disconnectListener);
+
+                try {
+                    await char.startNotifications();
+                    await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time
+                } catch (e) {
+                    reject(e);
+                    return;
+                }
+
+                const vek = await crypto.subtle.importKey("raw", Uint8Array.from(vekRaw), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);
+                runSyncProtocol(transport, vek,
+                    (res) => {
+                        char.removeEventListener('characteristicvaluechanged', changeListener);
+                        device.removeEventListener('gattserverdisconnected', disconnectListener);
+                        totalPulled += res.pulled;
+                        totalPushed += res.pushed;
+                        resolve();
+                    },
+                    (err) => {
+                        char.removeEventListener('characteristicvaluechanged', changeListener);
+                        device.removeEventListener('gattserverdisconnected', disconnectListener);
+                        reject(err);
+                    }
+                );
+            });
+            successCount++;
+        } catch (e) {
+            lastErr = e;
+            console.warn(`[Ext/BLE] Failed to sync with device ${paired.id}:`, e);
+        }
+    }
+
+    if (successCount === 0) throw lastErr || new Error("Failed to sync with any paired device.");
+    return { ok: true, pulled: totalPulled, pushed: totalPushed };
 }
 
 async function executeBlePairing(deviceName: string, deviceId: string): Promise<any> {

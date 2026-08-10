@@ -39,6 +39,15 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        window.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        // Ensure there is an actual view hierarchy that Android 11 can apply MATCH_PARENT to instantly
+        val rootFrame = android.widget.FrameLayout(this)
+        setContentView(rootFrame)
 
         val query = intent.getStringExtra(EXTRA_QUERY) ?: ""
         val usernameId = intent.getParcelableExtra<android.view.autofill.AutofillId>(EXTRA_USERNAME_ID)
@@ -252,22 +261,25 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             finish()
         }
 
-        if (validEntries.size == 1) {
-            returnDatasetForEntry(validEntries.first())
-            return
-        }
-
         // ── MULTI-ACCOUNT UI ──────────────────────────────────────────
-        // There are multiple matching accounts. Instead of response-level
-        // auth (which is buggy), we simply draw a native selection UI
-        // right here in the transparent Auth activity.
+        // There are multiple matching accounts, OR we still want to show the UI
+        // so the user has the option to Generate a new password.
         val dp = { v: Int -> (v * resources.displayMetrics.density).toInt() }
 
         val root = android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.VERTICAL
-            setPadding(dp(24), dp(32), dp(24), dp(24))
+            setPadding(dp(24), dp(72), dp(24), dp(24))
             setBackgroundColor(0xFF1E1E2E.toInt())
         }
+
+        val topBranding = android.widget.TextView(this).apply {
+            text = "🛡️ PeerVault"
+            textSize = 14f
+            setTextColor(0xFF8888AA.toInt())
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 0, 0, dp(16))
+        }
+        root.addView(topBranding)
 
         val titleTv = android.widget.TextView(this).apply {
             text = "Select Account"
@@ -303,11 +315,42 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             root.addView(btn)
         }
 
+        val generateBtn = android.widget.Button(this).apply {
+            text = "➕ Generate New Password"
+            textSize = 16f
+            setTextColor(0xFFFFFFFF.toInt())
+            setBackgroundColor(0xFF2A2A3E.toInt())
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, dp(12), 0, dp(12))
+            }
+        }
+        generateBtn.setOnClickListener {
+            val genIntent = Intent(applicationContext, PeerVaultAutofillGeneratorActivity::class.java).apply {
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+                if (inlineSpecs != null) {
+                    putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs.toList()))
+                }
+            }
+            startActivityForResult(genIntent, 999)
+        }
+        root.addView(generateBtn)
+
         val cancelBtn = android.widget.Button(this).apply {
             text = "Cancel"
             setTextColor(0xFFAAAAAA.toInt())
             setBackgroundColor(android.graphics.Color.TRANSPARENT)
             setPadding(dp(24), dp(8), dp(24), dp(8))
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(16), 0, 0) }
         }
         cancelBtn.setOnClickListener {
             setResult(RESULT_CANCELED)
@@ -319,7 +362,26 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             setBackgroundColor(0xFF1E1E2E.toInt())
             addView(root)
         }
-        setContentView(scrollView)
+        
+        // Append to the root frame created in onCreate to prevent bounds cropping
+        val rootFrame = findViewById<android.widget.FrameLayout>(android.R.id.content).getChildAt(0) as? android.widget.FrameLayout
+        if (rootFrame != null) {
+            rootFrame.addView(scrollView)
+        } else {
+            setContentView(scrollView)
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 999) {
+            if (resultCode == RESULT_OK) {
+                // Pass the dataset from Generator directly to OS
+                setResult(RESULT_OK, data)
+                finish()
+            }
+            // If cancelled, stay on the selection screen.
+        }
     }
 
 }

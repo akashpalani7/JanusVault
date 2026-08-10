@@ -123,7 +123,7 @@
             android:name="com.example.peervault.app.PeerVaultQuickTileService"
             android:exported="true"
             android:icon="@android:drawable/ic_lock_lock"
-            android:label="PeerVault listening"
+            android:label="PeerVault Listener"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

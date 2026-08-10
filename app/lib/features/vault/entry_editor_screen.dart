@@ -22,6 +22,12 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
   bool _obscurePassword = true;
   bool _saving = false;
 
+  bool _useUpper = true;
+  bool _useLower = true;
+  bool _useDigits = true;
+  bool _useSymbols = true;
+  double _passwordLength = 20.0;
+
   @override
   void initState() {
     super.initState();
@@ -42,7 +48,14 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
   }
 
   void _generatePassword() {
-    final generated = ref.read(passwordGeneratorProvider).generate(const PasswordGeneratorOptions());
+    final opts = PasswordGeneratorOptions(
+      length: _passwordLength.toInt(),
+      includeUppercase: _useUpper,
+      includeLowercase: _useLower,
+      includeDigits: _useDigits,
+      includeSymbols: _useSymbols,
+    );
+    final generated = ref.read(passwordGeneratorProvider).generate(opts);
     setState(() => _passwordCtrl.text = generated);
   }
 
@@ -132,6 +145,66 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
                 ],
               ),
             ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Text('Length: ${_passwordLength.toInt()}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              Expanded(
+                child: Slider(
+                  value: _passwordLength,
+                  min: 4,
+                  max: 64,
+                  divisions: 60,
+                  label: _passwordLength.toInt().toString(),
+                  onChanged: (val) {
+                    setState(() => _passwordLength = val);
+                    _generatePassword();
+                  },
+                ),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('A-Z'),
+                selected: _useUpper,
+                onSelected: (val) {
+                  if (!val && !_useLower && !_useDigits && !_useSymbols) return;
+                  setState(() => _useUpper = val);
+                  _generatePassword();
+                },
+              ),
+              FilterChip(
+                label: const Text('a-z'),
+                selected: _useLower,
+                onSelected: (val) {
+                  if (!val && !_useUpper && !_useDigits && !_useSymbols) return;
+                  setState(() => _useLower = val);
+                  _generatePassword();
+                },
+              ),
+              FilterChip(
+                label: const Text('0-9'),
+                selected: _useDigits,
+                onSelected: (val) {
+                  if (!val && !_useUpper && !_useLower && !_useSymbols) return;
+                  setState(() => _useDigits = val);
+                  _generatePassword();
+                },
+              ),
+              FilterChip(
+                label: const Text('!@#'),
+                selected: _useSymbols,
+                onSelected: (val) {
+                  if (!val && !_useUpper && !_useLower && !_useDigits) return;
+                  setState(() => _useSymbols = val);
+                  _generatePassword();
+                },
+              ),
+            ],
           ),
           const SizedBox(height: 24),
           FilledButton(
