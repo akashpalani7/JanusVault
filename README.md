@@ -71,62 +71,76 @@ Click the JanusVault extension icon in your browser toolbar to get started. Open
 # ═══════════════════════════════════════════════════════════════════════
 
 ## Android Native (Kotlin)
-  d:\Akash\Projects\JanusVault\app\android\app\src\main\kotlin\com\example\janusvault\app\
-    ├── JanusVaultAutofillService.kt    (367 lines) — Autofill framework entry point + FieldFinder
-    ├── JanusVaultAutofillAuthActivity.kt (164 lines) — Biometric unlock activity for autofill
-    ├── JanusVaultAutofillGeneratorActivity.kt       — Activity for auto-generating strong passwords
-    ├── AutofillUtils.kt                            — SaveInfo and dataset builder utilities
-    ├── AutofillBridge.kt              (163 lines) — Flutter engine bridge for autofill
-    ├── ApprovalNotifier.kt            (69 lines)  — Remote approval notification
-    ├── JanusVaultRemoteApprovalActivity.kt          — Remote approval biometric activity
-    ├── JanusVaultSyncForegroundService.kt (90 lines) — Background sync service
-    └── JanusVaultQuickTileService.kt                — Quick settings tile for sync toggle
+```text
+app/android/app/src/main/kotlin/com/example/janusvault/app/
+  ├── JanusVaultAutofillService.kt           — Autofill framework entry point + FieldFinder
+  ├── JanusVaultAutofillAuthActivity.kt      — Biometric unlock activity for autofill
+  ├── JanusVaultAutofillGeneratorActivity.kt — Activity for auto-generating strong passwords
+  ├── AutofillUtils.kt                       — SaveInfo and dataset builder utilities
+  ├── AutofillBridge.kt                      — Flutter engine bridge for autofill
+  ├── ApprovalNotifier.kt                    — Remote approval notification
+  ├── JanusVaultRemoteApprovalActivity.kt    — Remote approval biometric activity
+  ├── JanusVaultSyncForegroundService.kt     — Background sync service
+  └── JanusVaultQuickTileService.kt          — Quick settings tile for sync toggle
+```
 
 ## Android Resources
-    ├── AndroidManifest.xml            (141 lines) — Service/activity declarations
-    └── res/xml/autofill_service_config.xml (31 lines) — Autofill service config
+```text
+app/android/app/src/main/
+  ├── AndroidManifest.xml                    — Service/activity declarations
+  └── res/xml/autofill_service_config.xml    — Autofill service config
+```
 
 ## Dart (Flutter)
-  d:\Akash\Projects\JanusVault\app\lib\
-    ├── autofill_entrypoint.dart       (216 lines) — Background isolate for autofill + sync
-    ├── main.dart                                   — Main app entrypoint
-    └── core/
-        ├── sync/
-        │   ├── ble_gatt_service.dart  (296 lines) — BLE GATT server (peripheral)
-        │   ├── lan_sync_service.dart  (519 lines) — LAN WebSocket server + mDNS
-        │   ├── sync_message_handler.dart (338 lines) — Shared sync protocol handler
-        │   └── sync_protocol.dart                  — SyncMessage types + encoding
-        ├── vault/
-        │   ├── vault_session.dart                  — VEK session management
-        │   └── vault_repository.dart               — Vault CRUD
-        ├── storage/
-        │   ├── vault_database.dart                 — Encrypted entry storage
-        │   └── secure_key_store.dart               — Flutter secure storage wrapper
-        └── crypto/
-            └── crypto_engine.dart                  — All cryptographic operations
+```text
+app/lib/
+  ├── autofill_entrypoint.dart               — Background isolate for autofill + sync
+  ├── main.dart                              — Main app entrypoint
+  ├── features/                              — UI screens (Vault, Devices, Unlock, Setup)
+  └── core/
+      ├── sync/
+      │   ├── ble_gatt_service.dart          — BLE GATT server (peripheral)
+      │   ├── lan_sync_service.dart          — LAN WebSocket server + mDNS
+      │   ├── sync_message_handler.dart      — Shared sync protocol handler
+      │   └── sync_protocol.dart             — SyncMessage types + encoding
+      ├── vault/
+      │   ├── vault_session.dart             — VEK session management
+      │   └── vault_repository.dart          — Vault CRUD
+      ├── storage/
+      │   ├── vault_database.dart            — Encrypted entry storage
+      │   └── secure_key_store.dart          — Flutter secure storage wrapper
+      ├── devices/
+      │   └── device_manager.dart            — Known trusted devices and revocation API
+      └── crypto/
+          └── crypto_engine.dart             — All cryptographic operations
+```
 
 ## Browser Extension (TypeScript)
-  d:\Akash\Projects\JanusVault\extension\src\
-    ├── content/
-    │   └── detect.ts                  (503 lines) — Content script: field detection, chip UI
-    ├── background/
-    │   └── service-worker.ts          (579 lines) — MV3 service worker: message routing
-    ├── offscreen/
-    │   ├── offscreen-ble.html                      — Offscreen document for BLE
-    │   └── offscreen-ble.ts           (130 lines) — BLE auth execution via Web Bluetooth
-    ├── lib/
-    │   ├── sync-client.ts             (349 lines) — Sync protocol client (WebSocket + BLE)
-    │   ├── auth-client.ts                          — LAN phone auth request
-    │   ├── crypto.ts                               — Cryptographic operations mirror
-    │   ├── models.ts                               — TypeScript type definitions
-    │   ├── storage.ts                              — chrome.storage.local wrapper
-    │   └── pairing-client.ts                       — Pairing flow client
-    └── popup/
-        ├── popup.html                              — Extension popup UI
-        ├── popup.css                               — Popup styles
-        └── popup.ts                                — Popup logic
+```text
+extension/src/
+  ├── content/
+  │   └── detect.ts                          — Content script: field detection, chip UI
+  ├── background/
+  │   └── service-worker.ts                  — MV3 service worker: message routing
+  ├── offscreen/
+  │   ├── offscreen-ble.html                 — Offscreen document for BLE
+  │   └── offscreen-ble.ts                   — BLE auth execution via Web Bluetooth
+  ├── lib/
+  │   ├── sync-client.ts                     — Sync protocol client (WebSocket + BLE)
+  │   ├── auth-client.ts                     — LAN phone auth request
+  │   ├── crypto.ts                          — Cryptographic operations mirror
+  │   ├── models.ts                          — TypeScript type definitions
+  │   ├── storage.ts                         — chrome.storage.local wrapper
+  │   └── pairing-client.ts                  — Pairing flow client
+  └── popup/
+      ├── popup.html                         — Extension popup UI
+      ├── popup.css                          — Popup styles
+      └── popup.ts                           — Popup logic
+```
 
 ## Configuration
-  d:\Akash\Projects\JanusVault\extension\
-    ├── public/manifest.json           (37 lines) — Extension manifest (MV3)
-    └── tsconfig.json                              — TypeScript config
+```text
+extension/
+  ├── public/manifest.json           (37 lines) — Extension manifest (MV3)
+  └── tsconfig.json                              — TypeScript config
+```
