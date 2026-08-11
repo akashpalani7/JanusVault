@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../vault/vault_list_screen.dart';
+import '../home/main_screen.dart';
 
 class PermissionsScreen extends StatefulWidget {
   const PermissionsScreen({super.key});
@@ -11,7 +11,7 @@ class PermissionsScreen extends StatefulWidget {
     final isNotificationGranted = await Permission.notification.isGranted;
     if (!context.mounted) return;
     
-    final target = isNotificationGranted ? const VaultListScreen() : const PermissionsScreen();
+    final target = isNotificationGranted ? const MainScreen() : const PermissionsScreen();
     
     if (removeUntil) {
       Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => target), (route) => false);
@@ -128,7 +128,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
     if (mounted) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const VaultListScreen()),
+          MaterialPageRoute(builder: (_) => const MainScreen()),
         );
       });
     }
@@ -146,7 +146,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
     final colorScheme = theme.colorScheme;
     
     // Premium dynamic color assignment based on status
-    final cardColor = isGranted ? colorScheme.primaryContainer.withAlpha(50) : colorScheme.surfaceVariant.withAlpha(50);
+    final cardColor = isGranted ? colorScheme.primaryContainer.withAlpha(50) : colorScheme.surfaceContainerHighest.withAlpha(50);
     final borderColor = isGranted ? colorScheme.primary.withAlpha(100) : colorScheme.outline.withAlpha(60);
     final iconColor = isGranted ? colorScheme.primary : colorScheme.onSurfaceVariant;
 
@@ -172,7 +172,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
                     borderRadius: BorderRadius.circular(12),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
+                        color: Colors.black.withValues(alpha: 0.05),
                         blurRadius: 10,
                         offset: const Offset(0, 4),
                       )
@@ -298,7 +298,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'PeerVault needs permissions to reliably sync your offline passwords across your devices without tracking you.',
+                      'JanusVault needs permissions to reliably sync your offline passwords across your devices without tracking you.',
                       textAlign: TextAlign.center,
                       style: theme.textTheme.bodyLarge?.copyWith(
                         color: colorScheme.onSurfaceVariant,
@@ -319,10 +319,32 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
                     _buildPermissionCard(
                       icon: Icons.bluetooth_connected_rounded,
                       title: 'Nearby Devices (Bluetooth)',
-                      description: 'Allows PeerVault to advertise and sync directly with your PC over BLE entirely offline.',
+                      description: 'Allows JanusVault to advertise and sync directly with your PC over BLE entirely offline.',
                       isGranted: _bluetoothGranted,
                       onRequest: _requestBluetooth,
                       isMandatory: false,
+                    ),
+                    const SizedBox(height: 24),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondaryContainer.withAlpha(128),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: colorScheme.secondary.withAlpha(76)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.tips_and_updates, color: colorScheme.secondary),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(
+                              'Autofill Tip: If the keyboard chip is hidden by a paste suggestion, long-press the input field → tap \'Autofill\' to trigger JanusVault manually.',
+                              style: theme.textTheme.bodyMedium?.copyWith(color: colorScheme.onSecondaryContainer),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -333,10 +355,10 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
               padding: const EdgeInsets.all(24),
               decoration: BoxDecoration(
                 color: theme.scaffoldBackgroundColor,
-                border: Border(top: BorderSide(color: theme.dividerColor.withOpacity(0.1))),
+                border: Border(top: BorderSide(color: theme.dividerColor.withValues(alpha: 0.1))),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.02),
+                    color: Colors.black.withValues(alpha: 0.02),
                     offset: const Offset(0, -4),
                     blurRadius: 16,
                   )

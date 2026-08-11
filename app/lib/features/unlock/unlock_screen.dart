@@ -13,9 +13,23 @@ class UnlockScreen extends ConsumerStatefulWidget {
   ConsumerState<UnlockScreen> createState() => _UnlockScreenState();
 }
 
-class _UnlockScreenState extends ConsumerState<UnlockScreen> {
+class _UnlockScreenState extends ConsumerState<UnlockScreen> with SingleTickerProviderStateMixin {
   bool _isAuthenticating = false;
   String? _errorMessage;
+  late final AnimationController _shakeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _shakeController = AnimationController(vsync: this, duration: const Duration(milliseconds: 300));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _unlock());
+  }
+
+  @override
+  void dispose() {
+    _shakeController.dispose();
+    super.dispose();
+  }
 
   Future<void> _unlock() async {
     setState(() {
@@ -27,12 +41,14 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
       final bioResult = await ref.read(biometricAuthProvider).authenticate();
       if (!bioResult.success) {
         setState(() => _errorMessage = bioResult.errorMessage ?? 'Authentication was not completed');
+        _shakeController.forward(from: 0);
         return;
       }
 
       final settings = VaultDatabase.instance.settings;
       if (settings == null) {
         setState(() => _errorMessage = 'No vault found on this device yet.');
+        _shakeController.forward(from: 0);
         return;
       }
 
@@ -44,52 +60,112 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> {
       }
     } catch (e) {
       setState(() => _errorMessage = 'Unlock failed: $e');
+      _shakeController.forward(from: 0);
     } finally {
       if (mounted) setState(() => _isAuthenticating = false);
     }
   }
 
   @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _unlock());
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Card(
-            elevation: 4,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.lock_outline, size: 72, color: Colors.indigo),
-                  const SizedBox(height: 16),
-                  Text('PeerVault', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.indigo)),
-                  const SizedBox(height: 24),
-                  if (_isAuthenticating) const CircularProgressIndicator(),
-                  if (_errorMessage != null) ...[
-                    Text(_errorMessage!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Theme.of(context).colorScheme.surface,
+              Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Card(
+              elevation: 8,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedBuilder(
+                      animation: _shakeController,
+                      builder: (context, child) {
+                        final padding = 10.0 * (0.5 - (0.5 - _shakeController.value).abs()) * 2;
+                        return Transform.translate(
+                          offset: Offset(padding, 0),
+                          child: child,
+                        );
+                      },
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 0.8, end: 1.0),
+                        duration: const Duration(milliseconds: 600),
+                        curve: Curves.elasticOut,
+                        builder: (context, val, child) {
+                          return Transform.scale(
+                            scale: val,
+                            child: Icon(
+                              _errorMessage != null ? Icons.lock : Icons.lock_open,
+                              size: 72,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
                     const SizedBox(height: 16),
-                    FilledButton.icon(
-                      onPressed: _unlock,
-                      icon: const Icon(Icons.fingerprint),
-                      label: const Text('Unlock Vault'),
-                      style: FilledButton.styleFrom(minimumSize: const Size(double.infinity, 48)),
+                    Text(
+                      'JanusVault',
+                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
-                      child: const Text('Lost your device? Use Recovery Kit'),
-                    ),
+                    const SizedBox(height: 24),
+                    if (_isAuthenticating)
+                      const CircularProgressIndicator()
+                    else ...[
+                      if (_errorMessage != null)
+                        Text(_errorMessage!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      InkWell(
+                        onTap: _unlock,
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.fingerprint, size: 48, color: Theme.of(context).colorScheme.onPrimaryContainer),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Tap to Unlock',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
+                        child: const Text('Lost your device? Use Recovery Kit'),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.content.Context
 import android.os.Handler
@@ -17,13 +17,13 @@ import kotlin.coroutines.resumeWithException
 /**
  * Owns a single, long-lived FlutterEngine dedicated to autofill work,
  * separate from the engine the main Activity uses. This lets autofill
- * suggestions work even when PeerVault's main UI has never been opened in
+ * suggestions work even when JanusVault's main UI has never been opened in
  * this process (e.g. right after the OS killed the app in the background).
  *
  * All actual vault/crypto logic lives in Dart (see autofill_entrypoint.dart)
  * — this class is purely plumbing: start the engine, run the Dart
  * `autofillMain` entrypoint, and forward MethodChannel calls with
- * coroutine-friendly suspend wrappers so PeerVaultAutofillService reads
+ * coroutine-friendly suspend wrappers so JanusVaultAutofillService reads
  * top-to-bottom instead of nesting callbacks.
  *
  * IMPORTANT: `FlutterLoader.ensureInitializationCompleteAsync` is, despite
@@ -36,7 +36,7 @@ import kotlin.coroutines.resumeWithException
  * the engine to finish starting before issuing a method call.
  */
 object AutofillBridge {
-    private const val CHANNEL_NAME = "com.peervault.app/autofill"
+    private const val CHANNEL_NAME = "com.janusvault.app/autofill"
     private const val DART_ENTRYPOINT = "autofillMain"
     private const val STARTUP_TIMEOUT_MS = 10_000L
 
@@ -81,9 +81,9 @@ object AutofillBridge {
                 }
 
                 val entrypoint = DartExecutor.DartEntrypoint(loader.findAppBundlePath(), DART_ENTRYPOINT)
-                android.util.Log.e("PeerVault", "Calling executeDartEntrypoint...")
+                android.util.Log.e("JanusVault", "Calling executeDartEntrypoint...")
                 newEngine.dartExecutor.executeDartEntrypoint(entrypoint)
-                android.util.Log.e("PeerVault", "executeDartEntrypoint completed!")
+                android.util.Log.e("JanusVault", "executeDartEntrypoint completed!")
             } catch (e: Exception) {
                 if (!deferred.isCompleted) deferred.completeExceptionally(e)
             }
@@ -121,7 +121,7 @@ object AutofillBridge {
     }
 
     /** Starts the LAN sync listener — see _startSyncListening in
-     * autofill_entrypoint.dart. Called by PeerVaultSyncForegroundService. */
+     * autofill_entrypoint.dart. Called by JanusVaultSyncForegroundService. */
     suspend fun startSyncListening(context: Context, displayName: String, bluetoothEnabled: Boolean) {
         ensureReady(context)
         invoke("startSyncListening", mapOf("displayName" to displayName, "bluetoothEnabled" to bluetoothEnabled))
@@ -132,7 +132,7 @@ object AutofillBridge {
         invoke("stopSyncListening", null)
     }
 
-    /** Called from PeerVaultRemoteApprovalActivity once the user has
+    /** Called from JanusVaultRemoteApprovalActivity once the user has
      * responded (and, if approving, passed BiometricPrompt) to the
      * "Approve access from your browser?" notification. Not a suspend
      * function and doesn't call ensureReady: this only ever gets called

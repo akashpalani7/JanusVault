@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "PeerVault",
+  "name": "JanusVault",
   "version": "1.0.0",
-  "description": "Offline-first, decentralized password manager companion — autofill, capture, and sync with your PeerVault phone app.",
+  "description": "Offline-first, decentralized password manager companion — autofill, capture, and sync with your JanusVault phone app.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

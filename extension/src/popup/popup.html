@@ -2,41 +2,43 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>PeerVault</title>
+    <title>JanusVault</title>
+    <!-- Include Inter font to match flutter app -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header>
-      <h1>PeerVault</h1>
+      <h1>JanusVault</h1>
       <span id="status" class="status">checking…</span>
     </header>
 
     <main>
       <section id="lockedView" class="hidden">
         <h2>Link your browser</h2>
-        <p class="hint">To seamlessly sync passwords, you need to pair this browser to your phone's PeerVault.</p>
+        <p class="hint">To seamlessly sync passwords, you need to pair this browser to your phone's JanusVault.</p>
         
         <input id="deviceNameInput" type="text" placeholder="Name this device (e.g. Work laptop - Brave)" />
         
-        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
-          <h3 style="margin-top:0;">Option 1: Pair over Wi-Fi</h3>
+        <div class="pairing-option">
+          <h3>Option 1: Pair over Wi-Fi</h3>
           <p class="hint">Enter your phone's Local IP address (shown on its Sync screen) to connect instantly over Wi-Fi.</p>
-          <div style="display: flex; gap: 8px;">
-            <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" style="flex:1; margin-bottom: 0;" />
-            <button id="lanPairButton" style="width: auto; margin-top: 0; flex-shrink: 0;">Pair over Wi-Fi</button>
+          <div class="flex-row">
+            <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" />
+            <button id="lanPairButton">Pair over Wi-Fi</button>
           </div>
         </div>
 
-        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
-          <h3 style="margin-top:0;">Option 2: Pair via Bluetooth</h3>
-          <p class="hint">Ensure PeerVault is open on your phone with Bluetooth sync enabled.</p>
-          <button id="blePairButton" class="secondary" style="width:100%;">Pair via Bluetooth</button>
+        <div class="pairing-option">
+          <h3>Option 2: Pair via Bluetooth</h3>
+          <p class="hint">Ensure JanusVault is open on your phone with Bluetooth sync enabled.</p>
+          <button id="blePairButton" class="secondary">Pair via Bluetooth</button>
         </div>
 
-        <div style="margin: 16px 0; border: 1px solid #333; padding: 12px; border-radius: 8px;">
-          <h3 style="margin-top:0;">Option 3: Paste Code</h3>
+        <div class="pairing-option">
+          <h3>Option 3: Paste Code</h3>
           <p class="hint">Alternatively, open <i>Trusted devices → Pair new device</i> on the phone, and paste the code here.</p>
-          <textarea id="pairingInput" rows="3" placeholder="peervault-pair:v2:..."></textarea>
+          <textarea id="pairingInput" rows="3" placeholder="janusvault-pair:v2:..."></textarea>
           <button id="pairButton">Pair via code</button>
         </div>
 
@@ -46,17 +48,17 @@
       <section id="phoneSection" class="hidden">
         <h2>Phone connection</h2>
         <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's LAN address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
-        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" style="flex:1; margin-bottom: 0;" />
-          <button id="syncButton" style="width: auto; margin-top: 0; flex-shrink: 0;">Sync via Wi-Fi</button>
+        <div class="flex-row" style="margin-bottom: 8px;">
+          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" />
+          <button id="syncButton">Sync via Wi-Fi</button>
         </div>
-        <button id="syncBleButton" class="secondary" style="width:100%;">Sync via Bluetooth</button>
+        <button id="syncBleButton" class="secondary">Sync via Bluetooth</button>
         <p id="syncStatus" class="hint"></p>
 
-        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #ddd;">
-          <h3 style="margin-top:0; font-size: 13px;">Autofill Authentication</h3>
-          <p class="hint" style="margin-bottom: 8px;">Choose how website autofill requests securely connect to your phone to ask for approval.</p>
-          <select id="authMethodSelect" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-family: monospace;">
+        <div class="pairing-option">
+          <h3>Autofill Authentication</h3>
+          <p class="hint">Choose how website autofill requests securely connect to your phone to ask for approval.</p>
+          <select id="authMethodSelect">
             <option value="wifi">Use Wi-Fi (LAN)</option>
             <option value="bluetooth">Use Bluetooth</option>
           </select>
@@ -82,19 +84,21 @@
         <input id="newWebsiteInput" type="text" placeholder="Website Name (e.g. GitHub)" />
         <input id="newWebsiteUrlInput" type="text" placeholder="Website URL (e.g. github.com)" />
         <input id="newUsernameInput" type="text" placeholder="Username or email" />
-        <div style="display:flex; gap:6px; align-items:center;">
-          <input id="newPasswordInput" type="text" placeholder="Password" style="flex:1;" />
+        <div class="flex-row">
+          <input id="newPasswordInput" type="password" placeholder="Password" />
         </div>
-        <div style="display:flex; justify-content:space-between; margin:8px 0; font-size:12px;">
+        
+        <div class="checkbox-group">
           <label><input type="checkbox" id="genUppercase" checked> A-Z</label>
           <label><input type="checkbox" id="genLowercase" checked> a-z</label>
           <label><input type="checkbox" id="genNumbers" checked> 0-9</label>
           <label><input type="checkbox" id="genSymbols" checked> !@#</label>
         </div>
         <input id="newPasswordLengthSlider" type="range" min="8" max="64" value="20" />
-        <p id="newPasswordLengthLabel" class="hint" style="text-align:center; margin-top:2px;">20 characters</p>
-        <button id="regeneratePasswordButton" class="secondary" style="margin-bottom:8px;">↻ Regenerate Password</button>
-        <button id="saveNewEntryButton">Save entry</button>
+        <p id="newPasswordLengthLabel" class="hint" style="text-align:center;">20 characters</p>
+        
+        <button id="regeneratePasswordButton" class="secondary" style="margin-bottom: 12px;">↻ Regenerate Password</button>
+        <button id="saveNewEntryButton" class="accent">Save entry</button>
         <button id="cancelAddEntryButton" class="secondary">Cancel</button>
         <p id="addEntryStatus" class="hint"></p>
       </section>
@@ -114,12 +118,13 @@
         <p class="hint">Lost your phone? This browser already holds the vault — generate a pairing code here and scan/type it into a brand-new phone's "Pair device" screen, no old phone required.</p>
         <button id="generatePairingButton" class="secondary">Generate pairing code</button>
         <div id="pairingOutput" class="hidden">
+          <div class="divider"></div>
           <p class="hint">Scan this QR code with the new device, or enter the text below instead:</p>
-          <div style="text-align: center; margin: 12px 0;">
-            <canvas id="pairingQrCanvas" style="background: white; padding: 8px; border-radius: 8px;"></canvas>
+          <div style="text-align: center; margin: 16px 0;">
+            <canvas id="pairingQrCanvas"></canvas>
           </div>
           <textarea id="pairingOutputText" rows="3" readonly></textarea>
-          <button id="copyPairingButton" class="secondary">Copy</button>
+          <button id="copyPairingButton" class="secondary">Copy code</button>
         </div>
       </section>
 
@@ -135,6 +140,7 @@
         <ul id="recycleBinList"></ul>
         <p id="recycleBinEmptyHint" class="hint hidden">Recycle bin is empty.</p>
       </section>
+      <div id="snackbar" class="snackbar hidden"></div>
     </main>
 
     <script type="module" src="popup.js"></script>

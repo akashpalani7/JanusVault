@@ -75,7 +75,7 @@ export function requestLanPairing(
       }
     };
 
-    socket.onerror = () => finish({ success: false, reason: `Could not connect to ${host}:${port}. Make sure PeerVault is open on your phone.` });
+    socket.onerror = () => finish({ success: false, reason: `Could not connect to ${host}:${port}. Make sure JanusVault is open on your phone.` });
     socket.onclose = () => finish({ success: false, reason: "Phone dropped the connection abruptly or rejected." });
   });
 }
@@ -88,7 +88,7 @@ export function requestBlePairing(
   preAuthorizedDevice?: any
 ): Promise<PairingOutcome> {
   return new Promise(async (resolve) => {
-    const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const JANUSVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
     const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
     const EOM_MARKER = '\x04';
     
@@ -117,7 +117,7 @@ export function requestBlePairing(
 
           if (!device) {
             device = await (navigator as any).bluetooth.requestDevice({
-              filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+              filters: [{ services: [JANUSVAULT_SERVICE_UUID] }]
             });
           }
       }
@@ -132,7 +132,7 @@ export function requestBlePairing(
           if (aborted) return;
           await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
           if (aborted) return;
-          const service = await server.getPrimaryService(PEERVAULT_SERVICE_UUID);
+          const service = await server.getPrimaryService(JANUSVAULT_SERVICE_UUID);
           if (aborted) return;
           char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
           if (aborted) return;

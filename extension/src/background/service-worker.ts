@@ -153,12 +153,13 @@ async function requestPhoneApprovalBle(actionLabel: string, syncAuthKey: CryptoK
     });
 
     if (response && response.outcome) {
-      if (response.outcome === 'unreachable' && navigator.userAgent.includes("Mac OS X") && response.error?.includes("NetworkError")) {
-        console.warn("[Ext/Auth] Mac OS BLE NetworkError detected - silently falling back to Wi-Fi");
+      if (response.outcome === 'unreachable') {
+        console.warn(`[Ext/Auth] BLE unreachable (${response.error}) - silently falling back to Wi-Fi`);
         const lastHost = await ExtensionStorage.getLastHost();
         if (lastHost) {
           const [host, port] = lastHost.split(":");
-          return await requestPhoneApproval(host, parseInt(port, 10) || 51827, actionLabel, syncAuthKey);
+          const wifiOutcome = await requestPhoneApproval(host, parseInt(port, 10) || 51827, actionLabel, syncAuthKey);
+          if (wifiOutcome !== "unreachable") return wifiOutcome;
         }
       }
       return response.outcome as PhoneAuthOutcome;
@@ -174,7 +175,17 @@ async function requireApprovalOrDeny(actionLabel: string, vek: CryptoKey): Promi
   const authMethod = await ExtensionStorage.getAuthMethod();
 
   if (authMethod === "bluetooth") {
-    const outcome = await requestPhoneApprovalBle(actionLabel, syncAuthKey);
+    let outcome = await requestPhoneApprovalBle(actionLabel, syncAuthKey);
+    
+    // Retry up to 3 times silently on 'unreachable'
+    let retries = 0;
+    while (outcome === "unreachable" && retries < 3) {
+        console.log(`[Ext/Auth] BLE/Wi-Fi unreachable, retrying silently (${retries + 1}/3)...`);
+        await new Promise(r => setTimeout(r, 1000));
+        outcome = await requestPhoneApprovalBle(actionLabel, syncAuthKey);
+        retries++;
+    }
+
     if (outcome === "unreachable") {
        return new Promise<ApprovalOutcome>((resolve) => {
          const rid = crypto.randomUUID();
@@ -485,32 +496,43 @@ async function attemptBackgroundSync(): Promise<void> {
      try {
        await setupOffscreenDocument();
        const vekRaw = Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", vek)));
-       await chrome.runtime.sendMessage({
+       const result = await chrome.runtime.sendMessage({
            type: 'BLE_EXECUTE_SYNC',
            vekRaw,
            forcePrompt: false,
        });
-     } catch {}
+       if (result?.rotated) {
+         cachedVek = null;
+       }
+     } catch {
+       if (!(await ExtensionStorage.getDeviceId())) cachedVek = null;
+     }
      return;
   }
 
-  const lastHost = await ExtensionStorage.getLastHost();
-  if (!lastHost) return;
-  const [host, portStr] = lastHost.split(":");
-  const port = Number(portStr) || 51827;
-  try {
-    await syncWithPhone(host, port, vek);
-  } catch {
-    // Silent — phone likely just isn't reachable right now (off network,
-    // app closed, "visible for sync" off). The alarm will try again.
+  const hosts = await ExtensionStorage.getKnownHosts();
+  if (hosts.length === 0) return;
+  for (const hostAndPort of hosts) {
+    const [host, portStr] = hostAndPort.split(":");
+    const port = Number(portStr) || 51827;
+    try {
+      const result = await syncWithPhone(host, port, vek);
+      if (result.rotated) {
+        cachedVek = null;
+      }
+      break; // Success! Stop trying other hosts
+    } catch {
+      if (!(await ExtensionStorage.getDeviceId())) cachedVek = null;
+      // Failed, try the next one
+    }
   }
 }
 
 chrome.runtime.onStartup.addListener(() => attemptBackgroundSync());
 chrome.runtime.onInstalled.addListener(() => attemptBackgroundSync());
-chrome.alarms.create("peervault-periodic-sync", { periodInMinutes: 5 });
+chrome.alarms.create("janusvault-periodic-sync", { periodInMinutes: 5 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "peervault-periodic-sync") attemptBackgroundSync();
+  if (alarm.name === "janusvault-periodic-sync") attemptBackgroundSync();
 });
 
 
@@ -630,11 +652,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const host = message.host as string;
         const port = (message.port as number) || 51827;
-        await ExtensionStorage.saveLastHost(`${host}:${port}`);
+        await ExtensionStorage.saveKnownHost(`${host}:${port}`);
         try {
           const result = await syncWithPhone(host, port, vek);
+          if (result.rotated) {
+            cachedVek = null;
+          }
           sendResponse({ ok: true, ...result });
         } catch (e) {
+          if (!(await ExtensionStorage.getDeviceId())) cachedVek = null;
           sendResponse({ ok: false, error: (e as Error).message });
         }
         break;
@@ -647,8 +673,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 vekRaw: message.vekRaw,
                 forcePrompt: message.forcePrompt,
             });
+            if (result?.rotated) {
+              cachedVek = null;
+            }
             sendResponse(result ?? { ok: false, error: "Offscreen document dropped the message" });
         } catch (e) {
+            if (!(await ExtensionStorage.getDeviceId())) cachedVek = null;
             sendResponse({ ok: false, error: (e as Error).message });
         }
         break;

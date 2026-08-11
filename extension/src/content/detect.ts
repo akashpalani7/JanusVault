@@ -109,7 +109,7 @@ function makeFloatingEl(anchorInput: HTMLInputElement | null, offsetTop = -32): 
 // ---------------------------------------------------------------------
 
 /**
- * Shows the "Fill from PeerVault" chip. Only carries non-secret metadata
+ * Shows the "Fill from JanusVault" chip. Only carries non-secret metadata
  * (uuid/website/username) — clicking it asks the background script to run
  * the actual autofill, which ALWAYS requires phone approval first. No
  * plaintext password is ever visible to, or handled by, this content
@@ -122,7 +122,7 @@ async function checkAndShowOverlays() {
   if (!passwordFields.length) return;
 
   const passwordField = passwordFields[0];
-  if (document.getElementById("peervault-autofill-chip") || document.getElementById("peervault-suggest-chip")) return;
+  if (document.getElementById("janusvault-autofill-chip") || document.getElementById("janusvault-suggest-chip")) return;
 
   let response: any;
   try {
@@ -140,7 +140,7 @@ async function checkAndShowOverlays() {
 }
 
 /**
- * Shows the "Fill from PeerVault" chip. Only carries non-secret metadata
+ * Shows the "Fill from JanusVault" chip. Only carries non-secret metadata
  * (uuid/website/username) — clicking it asks the background script to run
  * the actual autofill, which ALWAYS requires phone approval first. No
  * plaintext password is ever visible to, or handled by, this content
@@ -150,19 +150,19 @@ async function checkAndShowOverlays() {
 function offerAutofill(passwordField: FoundField, entries: MatchEntry[]) {
 
   const chip = makeFloatingEl(passwordField.input);
-  chip.id = "peervault-autofill-chip";
+  chip.id = "janusvault-autofill-chip";
   chip.style.cursor = "pointer";
-  chip.textContent = `Fill from PeerVault (${entries.length})`;
+  chip.textContent = `Fill from JanusVault (${entries.length})`;
 
   chip.addEventListener("click", () => {
-    const existing = document.getElementById("peervault-autofill-dropdown");
+    const existing = document.getElementById("janusvault-autofill-dropdown");
     if (existing) {
       existing.remove();
       return;
     }
 
     const dropdown = document.createElement("div");
-    dropdown.id = "peervault-autofill-dropdown";
+    dropdown.id = "janusvault-autofill-dropdown";
     dropdown.style.position = "absolute";
     const rect = chip.getBoundingClientRect();
     dropdown.style.top = `${window.scrollY + rect.bottom + 2}px`;
@@ -240,12 +240,12 @@ function generateStrongPassword(length: number): string {
 
 function offerNewPasswordSuggestion(passwordFields: FoundField[]) {
   if (!passwordFields.length) return;
-  if (document.getElementById("peervault-suggest-chip")) return;
+  if (document.getElementById("janusvault-suggest-chip")) return;
 
   const chip = makeFloatingEl(passwordFields[0].input);
-  chip.id = "peervault-suggest-chip";
+  chip.id = "janusvault-suggest-chip";
   chip.style.cursor = "pointer";
-  chip.textContent = "Suggest a strong password (PeerVault)";
+  chip.textContent = "Suggest a strong password (JanusVault)";
 
   let panel: HTMLDivElement | null = null;
 
@@ -387,16 +387,16 @@ function watchForCredentialSubmission() {
 }
 
 function showSaveBanner(domain: string, username: string, password: string) {
-  if (document.getElementById("peervault-save-banner")) return;
+  if (document.getElementById("janusvault-save-banner")) return;
   const anchor = findCandidateFields().find((f) => f.kind === "password")?.input ?? null;
   const banner = makeFloatingEl(anchor, 8);
-  banner.id = "peervault-save-banner";
+  banner.id = "janusvault-save-banner";
   banner.style.display = "flex";
   banner.style.alignItems = "center";
   banner.style.gap = "10px";
 
   const label = document.createElement("span");
-  label.textContent = `Save password for ${domain}${username ? ` (${username})` : ""} to PeerVault?`;
+  label.textContent = `Save password for ${domain}${username ? ` (${username})` : ""} to JanusVault?`;
   banner.appendChild(label);
 
   const resolveSave = () => {
@@ -414,7 +414,7 @@ function showSaveBanner(domain: string, username: string, password: string) {
     try {
       result = await chrome.runtime.sendMessage({ type: "CAPTURE_CREDENTIAL", domain, username, password });
     } catch(e) {}
-    label.textContent = result?.saved ? "Saved to PeerVault." : "Couldn't save — is PeerVault paired?";
+    label.textContent = result?.saved ? "Saved to JanusVault." : "Couldn't save — is JanusVault paired?";
     resolveSave();
     setTimeout(() => banner.remove(), 2500);
   });

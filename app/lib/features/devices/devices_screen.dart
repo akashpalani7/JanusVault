@@ -25,55 +25,6 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
 
   void _refresh() => setState(() => _devices = ref.read(deviceManagerProvider).listDevices());
 
-  @override
-  Widget build(BuildContext context) {
-    final deviceManager = ref.read(deviceManagerProvider);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Trusted devices')),
-      body: RefreshIndicator(
-        onRefresh: () async => _refresh(),
-        child: _devices.isEmpty
-            ? ListView(
-                children: const [
-                  Padding(
-                    padding: EdgeInsets.only(top: 80),
-                    child: Center(child: Text('No other trusted devices yet.\nPull down to refresh, or pair one below.', textAlign: TextAlign.center)),
-                  ),
-                ],
-              )
-            : ListView.builder(
-                itemCount: _devices.length,
-                itemBuilder: (context, index) {
-                  final d = _devices[index];
-                  return ListTile(
-                    leading: Icon(_iconFor(d.platform)),
-                    title: Text(d.displayName),
-                    subtitle: Text('Paired ${d.pairedAt.toLocal()} • Last synced ${d.lastSyncedAt.toLocal()}'),
-                    trailing: d.revoked
-                        ? const Chip(label: Text('Revoked'))
-                        : IconButton(
-                            icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
-                            onPressed: () async {
-                              await deviceManager.revokeDevice(d.deviceId);
-                              _refresh();
-                            },
-                          ),
-                  );
-                },
-              ),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        icon: const Icon(Icons.qr_code),
-        label: const Text('Pair new device'),
-        onPressed: () async {
-          await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _PairingFlowScreen()));
-          _refresh();
-        },
-      ),
-    );
-  }
-
   IconData _iconFor(DevicePlatform platform) {
     switch (platform) {
       case DevicePlatform.androidApp:
@@ -88,13 +39,150 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
         return Icons.extension;
     }
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final deviceManager = ref.read(deviceManagerProvider);
+
+    return Stack(
+      children: [
+        RefreshIndicator(
+          onRefresh: () async => _refresh(),
+          child: _devices.isEmpty
+              ? ListView(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 80),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.devices_other, size: 80, color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5)),
+                          const SizedBox(height: 24),
+                          const Text('No other trusted devices yet', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          const Text('Pull down to refresh, or pair one below.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              : ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: _devices.length,
+                  separatorBuilder: (context, index) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final d = _devices[index];
+                    // Simple logic for online/offline indicator: if synced in last 1 hour, assume recently online. Just an example.
+                    final recentlySynced = DateTime.now().difference(d.lastSyncedAt).inHours < 1;
+                    
+                    return Card(
+                      elevation: 1,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1))),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(_iconFor(d.platform), color: Theme.of(context).colorScheme.onPrimaryContainer, size: 28),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          d.displayName,
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      if (!d.revoked)
+                                        Container(
+                                          width: 8,
+                                          height: 8,
+                                          margin: const EdgeInsets.only(left: 8),
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: recentlySynced ? Colors.green : Colors.grey,
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text('Last synced: ${d.lastSyncedAt.toIso8601String().split('T')[0]} ${d.lastSyncedAt.toLocal().toString().split(' ')[1].substring(0, 5)}', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            if (d.revoked)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Text('Revoked', style: TextStyle(color: Colors.red, fontSize: 12, fontWeight: FontWeight.bold)),
+                              )
+                            else
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline, color: Colors.redAccent),
+                                tooltip: 'Revoke device',
+                                onPressed: () async {
+                                  final confirm = await showDialog<bool>(
+                                    context: context,
+                                    builder: (c) => AlertDialog(
+                                      title: const Text('Revoke Device?'),
+                                      content: Text('Are you sure you want to revoke "${d.displayName}"? It will no longer be able to sync or access new data.'),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
+                                        FilledButton(
+                                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                          onPressed: () => Navigator.of(c).pop(true), 
+                                          child: const Text('Revoke')
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                  if (confirm == true) {
+                                    await deviceManager.revokeDevice(d.deviceId);
+                                    _refresh();
+                                  }
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+        Positioned(
+          bottom: 16,
+          right: 16,
+          child: FloatingActionButton.extended(
+            heroTag: null,
+            icon: const Icon(Icons.qr_code_scanner),
+            label: const Text('Pair Device'),
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const _PairingFlowScreen()));
+              _refresh();
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
-/// Pairing is now a SINGLE offline step: the device that already holds the
-/// vault shows a QR code containing a pairing code + the VEK wrapped under
-/// a key derived from that code (see CryptoEngine + DeviceManager). The
-/// new device scans it and immediately has everything it needs — no
-/// network round trip, no asymmetric crypto, no cross-platform mismatch.
 class _PairingFlowScreen extends ConsumerStatefulWidget {
   const _PairingFlowScreen();
 
@@ -110,8 +198,16 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
   final _pasteController = TextEditingController();
 
   Future<void> _generatePackage() async {
-    final package = await ref.read(deviceManagerProvider).createPairingPackage();
-    setState(() => _qrPayload = package.encode());
+    try {
+      final package = await ref.read(deviceManagerProvider).createPairingPackage();
+      if (mounted) {
+        setState(() => _qrPayload = package.encode());
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = 'Cannot generate pairing code: ${e.toString()}');
+      }
+    }
   }
 
   Future<void> _handleScannedCode(String raw) async {
@@ -125,7 +221,7 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
           );
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
-      setState(() => _error = 'Pairing failed: could not read a valid PeerVault pairing code.');
+      setState(() => _error = 'Pairing failed: could not read a valid JanusVault pairing code.');
     }
   }
 
@@ -146,10 +242,11 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pair device'),
+        title: const Text('Pair Device'),
         actions: [
           IconButton(
             icon: Icon(_scanMode ? Icons.qr_code : Icons.qr_code_scanner),
+            tooltip: _scanMode ? 'Show QR Code' : 'Scan QR Code',
             onPressed: () => setState(() {
               _scanMode = !_scanMode;
               _error = null;
@@ -161,75 +258,70 @@ class _PairingFlowScreenState extends ConsumerState<_PairingFlowScreen> {
           ? Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(16),
                   child: TextField(
                     controller: _nameController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Name this device',
                       hintText: 'e.g. "Rahul\'s laptop"',
-                      border: OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.devices),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
                     ),
                     textCapitalization: TextCapitalization.words,
                   ),
                 ),
                 Expanded(
-                  child: MobileScanner(
-                    onDetect: (capture) {
-                      final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
-                      if (code != null) _handleScannedCode(code);
-                    },
+                  child: ClipRRect(
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+                    child: MobileScanner(
+                      onDetect: (capture) {
+                        final code = capture.barcodes.isNotEmpty ? capture.barcodes.first.rawValue : null;
+                        if (code != null) _handleScannedCode(code);
+                      },
+                    ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      const Text('Pairing from a browser? Paste the code it showed you instead:'),
-                      const SizedBox(height: 8),
-                      TextField(
-                        controller: _pasteController,
-                        maxLines: 2,
-                        decoration: const InputDecoration(hintText: 'peervault-pair:v2:...', border: OutlineInputBorder()),
-                      ),
-                      const SizedBox(height: 8),
-                      FilledButton(
-                        onPressed: () {
-                          final raw = _pasteController.text.trim();
-                          if (raw.isNotEmpty) _handleScannedCode(raw);
-                        },
-                        child: const Text('Use pasted code'),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_error != null)
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Text(_error!, style: const TextStyle(color: Colors.red)),
-                  ),
               ],
             )
           : Center(
               child: _qrPayload == null
                   ? const CircularProgressIndicator()
-                  : Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        QrImageView(data: _qrPayload!, size: 260, backgroundColor: Colors.white,),
-                        const SizedBox(height: 16),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 24),
-                          child: Text(
-                            'Scan this with the new device — pairing works completely offline.',
-                            textAlign: TextAlign.center,
+                  : SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(24),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.1),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
+                                )
+                              ]
+                            ),
+                            child: QrImageView(data: _qrPayload!, size: 260, backgroundColor: Colors.white),
                           ),
-                        ),
-                        if (_error != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 12),
-                            child: Text(_error!, style: const TextStyle(color: Colors.red)),
+                          const SizedBox(height: 32),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 32),
+                            child: Text(
+                              'Scan this QR code with your new device to pair completely offline.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 16),
+                            ),
                           ),
-                      ],
+                          if (_error != null)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 24),
+                              child: Text(_error!, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                            ),
+                        ],
+                      ),
                     ),
             ),
     );

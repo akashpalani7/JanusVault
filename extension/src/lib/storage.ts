@@ -1,15 +1,15 @@
 import { DeviceInfo, EncryptedEntryRecord } from "./models.js";
 
-const ENTRIES_KEY = "peervault.entries";
-const DEVICE_LOCAL_KEY_RAW = "peervault.device_local_key_raw"; // base64 — see getDeviceLocalKeyRaw's doc comment for why this is SESSION storage, not local
-const WRAPPED_VEK_KEY = "peervault.wrapped_vek";
-const DEVICE_ID_KEY = "peervault.device_id";
-const DEVICE_PAIRED_AT_KEY = "peervault.device_paired_at";
-const DEVICE_LAST_SYNCED_AT_KEY = "peervault.device_last_synced_at";
-const DEVICE_DISPLAY_NAME_KEY = "peervault.device_display_name";
-const LAST_HOST_KEY = "peervault.last_sync_host"; // "host:port" — where to reach the phone for both sync AND every auth approval
-const AUTH_METHOD_KEY = "peervault.auth_method"; // "wifi" or "bluetooth"
-const DEVICE_LIST_KEY = "peervault.known_devices"; // non-secret metadata received via sync's deviceInfo messages
+const ENTRIES_KEY = "janusvault.entries";
+const DEVICE_LOCAL_KEY_RAW = "janusvault.device_local_key_raw"; // base64 — see getDeviceLocalKeyRaw's doc comment for why this is SESSION storage, not local
+const WRAPPED_VEK_KEY = "janusvault.wrapped_vek";
+const DEVICE_ID_KEY = "janusvault.device_id";
+const DEVICE_PAIRED_AT_KEY = "janusvault.device_paired_at";
+const DEVICE_LAST_SYNCED_AT_KEY = "janusvault.device_last_synced_at";
+const DEVICE_DISPLAY_NAME_KEY = "janusvault.device_display_name";
+const LAST_HOST_KEY = "janusvault.last_sync_host"; // "host:port" — where to reach the phone for both sync AND every auth approval
+const AUTH_METHOD_KEY = "janusvault.auth_method"; // "wifi" or "bluetooth"
+const DEVICE_LIST_KEY = "janusvault.known_devices"; // non-secret metadata received via sync's deviceInfo messages
 
 /**
  * chrome.storage.local is sandboxed per-extension but is NOT hardware
@@ -133,6 +133,23 @@ export class ExtensionStorage {
 
   static async saveLastHost(hostAndPort: string): Promise<void> {
     await this._set(LAST_HOST_KEY, hostAndPort);
+  }
+
+  static async getKnownHosts(): Promise<string[]> {
+    const list = await this._get("janusvault.known_hosts");
+    if (!list) {
+      const last = await this.getLastHost();
+      if (last) return [last];
+      return [];
+    }
+    return list;
+  }
+
+  static async saveKnownHost(hostAndPort: string): Promise<void> {
+    const list = await this.getKnownHosts();
+    const newList = [hostAndPort, ...list.filter(h => h !== hostAndPort)].slice(0, 5);
+    await this._set("janusvault.known_hosts", newList);
+    await this.saveLastHost(hostAndPort); // backwards-compat
   }
 
   static async getDeviceList(): Promise<DeviceInfo[]> {

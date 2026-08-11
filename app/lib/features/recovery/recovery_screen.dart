@@ -4,9 +4,12 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../app_providers.dart';
+import '../../core/devices/device_manager.dart';
 import '../../core/models/recovery_kit.dart';
 import '../../core/models/trusted_device.dart';
 import '../../core/recovery/recovery_service.dart';
+import '../../core/storage/vault_database.dart';
+import '../../core/vault/vault_repository.dart';
 import '../../core/vault/vault_session.dart';
 import '../permissions/permissions_screen.dart';
 
@@ -63,13 +66,46 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
       final service = ref.read(recoveryServiceProvider);
       await service.recoverWithSecret(_secretCtrl.text.trim(), providedPackage: package);
       final name = _deviceNameCtrl.text.trim();
-      final newKit = await service.completeRecoveryOnThisDevice(
+      var newKit = await service.completeRecoveryOnThisDevice(
         displayName: name.isEmpty ? 'Recovered device' : name,
         platform: DevicePlatform.androidApp,
       );
+      
       ref.read(vaultUnlockedProvider.notifier).state = true;
-      // Do NOT navigate away yet — the new kit's secret only ever exists
-      // right now. Show it first; "Done" (below) is what actually leaves.
+      
+      if (mounted) {
+        final rotate = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (c) => AlertDialog(
+            title: const Text('Rotate vault key?'),
+            content: const Text(
+                'It is highly recommended to rotate your encryption key if you lost '
+                'your old device or suspect it was stolen. This will invalidate the '
+                'encryption key on all previously paired devices.\n\n'
+                'This requires re-encrypting your entire vault. Do not close the app.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Skip')),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () => Navigator.of(c).pop(true), 
+                child: const Text('Rotate Key'),
+              ),
+            ],
+          ),
+        );
+        
+        if (rotate == true) {
+          setState(() => _recoverError = 'Rotating key and re-encrypting vault (do not close)...');
+          final selfId = VaultDatabase.instance.settings!.selfDeviceId;
+          final newVek = await DeviceManager.instance.rotateVek(selfDeviceId: selfId);
+          await VaultRepository.instance.reencryptAllWithNewVek(newVek);
+          
+          // Generate a new kit again because the VEK changed
+          newKit = await service.generateNewRecoveryKit();
+        }
+      }
+      
       setState(() => _postRecoveryKit = newKit);
     } catch (e) {
       setState(() => _recoverError = 'Recovery failed: ${e.toString().replaceFirst('Exception: ', '')}');
@@ -241,7 +277,7 @@ class _RecoveryScreenState extends ConsumerState<RecoveryScreen> {
       TextField(
         controller: _packagePasteCtrl,
         maxLines: 2,
-        decoration: const InputDecoration(hintText: 'peervault-recovery:v1:...', border: OutlineInputBorder()),
+        decoration: const InputDecoration(hintText: 'janusvault-recovery:v1:...', border: OutlineInputBorder()),
         onChanged: (_) => setState(() {}), // re-enable the button once something's pasted
       ),
       const SizedBox(height: 16),

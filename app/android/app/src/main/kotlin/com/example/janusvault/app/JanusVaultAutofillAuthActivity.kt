@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.content.Intent
 import android.os.Bundle
@@ -15,7 +15,7 @@ import org.json.JSONObject
 
 /**
  * Transparent activity the OS launches when the user taps a locked
- * "Unlock PeerVault to autofill" suggestion or an authentication-gated
+ * "Unlock JanusVault to autofill" suggestion or an authentication-gated
  * inline chip. Runs an androidx.biometric.BiometricPrompt to verify the
  * user's identity, then searches the vault for matching entries and returns
  * the real Dataset (with actual passwords) as the activity result per the
@@ -26,15 +26,15 @@ import org.json.JSONObject
  *   2. notify_only=false — vault is unlocked but user must biometric-verify
  *      before credentials are pasted (auth gating)
  */
-class PeerVaultAutofillAuthActivity : FragmentActivity() {
+class JanusVaultAutofillAuthActivity : FragmentActivity() {
 
     private val scope = MainScope()
 
     companion object {
-        const val EXTRA_QUERY = "peervault.extra.query"
-        const val EXTRA_USERNAME_ID = "peervault.extra.username_id"
-        const val EXTRA_PASSWORD_ID = "peervault.extra.password_id"
-        const val EXTRA_FOCUSED_ID = "peervault.extra.focused_id"
+        const val EXTRA_QUERY = "janusvault.extra.query"
+        const val EXTRA_USERNAME_ID = "janusvault.extra.username_id"
+        const val EXTRA_PASSWORD_ID = "janusvault.extra.password_id"
+        const val EXTRA_FOCUSED_ID = "janusvault.extra.focused_id"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,7 +75,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         )
 
         val promptInfo = BiometricPrompt.PromptInfo.Builder()
-            .setTitle("Unlock PeerVault")
+            .setTitle("Unlock JanusVault")
             .setSubtitle("Authenticate to autofill your saved password")
             .setAllowedAuthenticators(
                 androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
@@ -92,7 +92,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         passwordId: android.view.autofill.AutofillId?,
         focusedId: android.view.autofill.AutofillId?
     ) {
-        // Dismiss the "PeerVault is Locked" notification if it's still visible
+        // Dismiss the "JanusVault is Locked" notification if it's still visible
         val notifManager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
         notifManager.cancel(4001)
 
@@ -119,7 +119,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             val password = intent.getStringExtra("save_password") ?: ""
             val titleCasedName = appIdentifier.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
             AutofillBridge.saveCapturedCredential(applicationContext, titleCasedName, appIdentifier, username, password)
-            android.widget.Toast.makeText(applicationContext, "Saved to PeerVault!", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(applicationContext, "Saved to JanusVault!", android.widget.Toast.LENGTH_SHORT).show()
             
             val resultIntent = Intent()
             setResult(RESULT_OK, resultIntent)
@@ -166,19 +166,19 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         val tempFields = FieldFinder.Fields(usernameId, passwordId, "")
 
         if (validEntries.isEmpty()) {
-            android.util.Log.w("PeerVault", "Auth: no matching entry with password found, returning Generate Password dataset")
+            android.util.Log.w("JanusVault", "Auth: no matching entry with password found, returning Generate Password dataset")
             
-            val suggestPresentation = android.widget.RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-                setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD12 Generate strong password")
-                setTextViewText(com.example.peervault.R.id.subtitle, "PeerVault Generator")
+            val suggestPresentation = android.widget.RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
+                setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
+                setTextViewText(com.example.janusvault.R.id.subtitle, "JanusVault Generator")
             }
 
-            val genIntent = Intent(applicationContext, PeerVaultAutofillGeneratorActivity::class.java).apply {
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+            val genIntent = Intent(applicationContext, JanusVaultAutofillGeneratorActivity::class.java).apply {
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
                 if (inlineSpecs != null) {
                     putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs.toList()))
                 }
@@ -241,7 +241,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         fun returnDatasetForEntry(entry: JSONObject) {
             val websiteName = entry.optString("websiteName", "")
             val websiteUrl = entry.optString("websiteUrl", "")
-            val title = if (websiteName.isNotBlank()) websiteName else if (websiteUrl.isNotBlank()) websiteUrl else "PeerVault Account"
+            val title = if (websiteName.isNotBlank()) websiteName else if (websiteUrl.isNotBlank()) websiteUrl else "JanusVault Account"
             val username = entry.optString("username", "")
             val password = entry.optString("password", "")
 
@@ -256,7 +256,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
 
             val resultIntent = Intent()
             resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
-            android.util.Log.d("PeerVault", "Auth: returning single Dataset for '$title' (user=$username)")
+            android.util.Log.d("JanusVault", "Auth: returning single Dataset for '$title' (user=$username)")
             setResult(RESULT_OK, resultIntent)
             finish()
         }
@@ -273,7 +273,7 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
         }
 
         val topBranding = android.widget.TextView(this).apply {
-            text = "🛡️ PeerVault"
+            text = "🛡️ JanusVault"
             textSize = 14f
             setTextColor(0xFF8888AA.toInt())
             gravity = android.view.Gravity.CENTER
@@ -329,12 +329,12 @@ class PeerVaultAutofillAuthActivity : FragmentActivity() {
             }
         }
         generateBtn.setOnClickListener {
-            val genIntent = Intent(applicationContext, PeerVaultAutofillGeneratorActivity::class.java).apply {
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
-                putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+            val genIntent = Intent(applicationContext, JanusVaultAutofillGeneratorActivity::class.java).apply {
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME, intent.getStringExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME) ?: "")
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, usernameId)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+                putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
                 if (inlineSpecs != null) {
                     putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs.toList()))
                 }

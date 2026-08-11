@@ -1,4 +1,4 @@
-// PeerVault Cryptography Engine
+// JanusVault Cryptography Engine
 //
 // Design summary
 // ---------------
@@ -171,10 +171,9 @@ class CryptoEngine {
   // (`crypto.subtle.deriveKey` with "HKDF"). The wrapped VEK is embedded
   // directly in the QR payload, so pairing works with zero network calls.
 
-  static const List<int> _pairingSalt = [
-    0x50, 0x65, 0x65, 0x72, 0x56, 0x61, 0x75, 0x6c, 0x74, 0x2d, 0x70, 0x61, 0x69, 0x72, 0x2d, 0x76, 0x32,
-  ]; // ASCII "PeerVault-pair-v2" — a fixed, PUBLIC domain-separation salt.
-     // It does not need to be secret; only the pairing code does.
+  static final List<int> _pairingSalt = utf8.encode("JanusVault-pair-v2");
+  // ASCII "JanusVault-pair-v2" — a fixed, PUBLIC domain-separation salt.
+  // It does not need to be secret; only the pairing code does.
 
   /// Generates a fresh, high-entropy pairing code. 128 bits is more than
   /// enough since it's single-use and short-lived (shown once in a QR
@@ -212,7 +211,7 @@ class CryptoEngine {
   /// during pairing, from nothing but the pairing code. Identical output
   /// given the same code bytes, on both Dart and the browser extension.
   Future<SecretKey> derivePairingKeyFromCode(Uint8List code) {
-    return _hkdf.deriveKey(secretKey: SecretKey(code), nonce: _pairingSalt, info: utf8.encode('peervault-pairing-v2'));
+    return _hkdf.deriveKey(secretKey: SecretKey(code), nonce: _pairingSalt, info: utf8.encode('janusvault-pairing-v2'));
   }
 
   // ---------------------------------------------------------------------
@@ -240,7 +239,7 @@ class CryptoEngine {
   }
 
   Future<String> computeEcdhPin(List<int> sharedSecret) async {
-    final digest = await Hmac.sha256().calculateMac(sharedSecret, secretKey: SecretKey(utf8.encode('PeerVault-PIN')));
+    final digest = await Hmac.sha256().calculateMac(sharedSecret, secretKey: SecretKey(utf8.encode('JanusVault-PIN')));
     final view = ByteData.view(Uint8List.fromList(digest.bytes).buffer);
     final num = view.getUint32(0, Endian.big);
     final pin = (num % 1000000).toString().padLeft(6, '0');
@@ -250,7 +249,7 @@ class CryptoEngine {
   Future<SecretKey> deriveEcdhWrappingKey(List<int> sharedSecret) async {
     return _hkdf.deriveKey(
       secretKey: SecretKey(sharedSecret),
-      nonce: utf8.encode('PeerVault-ecdh-pair'),
+      nonce: utf8.encode('JanusVault-ecdh-pair'),
       info: utf8.encode('vekwrap'),
     );
   }
@@ -274,12 +273,11 @@ class CryptoEngine {
   // VEK cannot produce a valid HMAC and gets disconnected immediately,
   // before it ever sees a device list, vault metadata, or an auth prompt.
 
-  static const List<int> _syncAuthSalt = [
-    0x50, 0x65, 0x65, 0x72, 0x56, 0x61, 0x75, 0x6c, 0x74, 0x2d, 0x73, 0x79, 0x6e, 0x63, 0x2d, 0x76, 0x31,
-  ]; // ASCII "PeerVault-sync-v1" — fixed, public domain-separation salt.
+  static final List<int> _syncAuthSalt = utf8.encode("JanusVault-sync-v1");
+  // ASCII "JanusVault-sync-v1" — fixed, public domain-separation salt.
 
   Future<SecretKey> deriveSyncAuthKey(SecretKey vek) {
-    return _hkdf.deriveKey(secretKey: vek, nonce: _syncAuthSalt, info: utf8.encode('peervault-sync-auth-v1'));
+    return _hkdf.deriveKey(secretKey: vek, nonce: _syncAuthSalt, info: utf8.encode('janusvault-sync-auth-v1'));
   }
 
   /// HMAC-SHA256 over a plain string (deliberately NOT over arbitrary

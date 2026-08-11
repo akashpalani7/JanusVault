@@ -15,7 +15,7 @@ same fixed public salt and info string on both platforms:
 - TS: `deriveKeyFromPairingCode` in `extension/src/lib/crypto.ts`
 
 The wrapped VEK travels *inside* the QR payload itself
-(`peervault-pair:v2:<code>:<wrappedVek>`), so pairing needs zero network
+(`janusvault-pair:v2:<code>:<wrappedVek>`), so pairing needs zero network
 calls — scan or paste the string and you're done. See
 `DeviceManager.createPairingPackage` / `completeNewDevicePairing` (Dart)
 and `completePairing` in `service-worker.ts` (extension) for the full flow.

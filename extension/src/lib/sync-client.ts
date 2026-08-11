@@ -1,4 +1,4 @@
-import { computeRecordHash, deriveSyncAuthKey, hmacSha256 } from "./crypto.js";
+import { computeRecordHash, deriveSyncAuthKey, hmacSha256, unwrapVek, wrapVek, decryptString, encryptString } from "./crypto.js";
 import { DeviceInfo, EncryptedEntryRecord, RecordMeta, SyncMessage } from "./models.js";
 import { ExtensionStorage } from "./storage.js";
 
@@ -33,7 +33,7 @@ export interface SyncTransport {
   onError: ((err: Error) => void) | null;
 }
 
-export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number }> {
+export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number; rotated?: boolean }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://${host}:${port}`);
     const transport: SyncTransport = {
@@ -54,7 +54,7 @@ export async function syncWithPhone(host: string, port: number, vek: CryptoKey):
   });
 }
 
-export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Promise<{ pulled: number; pushed: number }> {
+export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Promise<{ pulled: number; pushed: number; rotated?: boolean }> {
     const vekRaw = Array.from(new Uint8Array(await crypto.subtle.exportKey("raw", vek)));
     const response = await chrome.runtime.sendMessage({
         type: 'TRIGGER_BLE_SYNC',
@@ -62,23 +62,25 @@ export async function syncWithBlePhone(vek: CryptoKey, forcePrompt = false): Pro
         forcePrompt,
     });
     if (!response?.ok) {
-        if (navigator.userAgent.includes("Mac OS X") && response?.error?.includes("NetworkError")) {
-            console.warn("[Ext/Sync] Mac OS BLE NetworkError detected - silently falling back to Wi-Fi");
-            const lastHost = await ExtensionStorage.getLastHost();
-            if (lastHost) {
-                const [host, port] = lastHost.split(":");
-                return syncWithPhone(host, parseInt(port, 10), vek);
+        console.warn(`[Ext/Sync] BLE sync failed (${response?.error}) - silently falling back to Wi-Fi`);
+        const lastHost = await ExtensionStorage.getLastHost();
+        if (lastHost) {
+            const [host, port] = lastHost.split(":");
+            try {
+                return await syncWithPhone(host, parseInt(port, 10), vek);
+            } catch (wifiErr) {
+                throw new Error(`${response?.error || 'BLE sync failed'} | Wi-Fi fallback failed: ${(wifiErr as Error).message}`);
             }
         }
         throw new Error(response?.error || 'BLE sync failed');
     }
-    return { pulled: response.pulled, pushed: response.pushed };
+    return { pulled: response.pulled, pushed: response.pushed, rotated: response.rotated };
 }
 
 export async function runSyncProtocol(
   transport: SyncTransport,
   vek: CryptoKey,
-  resolve: (res: { pulled: number; pushed: number }) => void,
+  resolve: (res: { pulled: number; pushed: number; rotated?: boolean }) => void,
   reject: (reason?: any) => void
 ) {
   const syncAuthKey = await deriveSyncAuthKey(vek);
@@ -87,6 +89,7 @@ export async function runSyncProtocol(
   let sentRealData = false;
   let handshakeConfirmed = false;
   let sentNonceBase64 = "";
+  let hasRotated = false;
 
   const sendRealDataOnceAuthenticated = async () => {
     if (sentRealData) return;
@@ -147,8 +150,28 @@ export async function runSyncProtocol(
         case "deviceInfo": {
           await sendRealDataOnceAuthenticated();
           const devices = message.payload.devices as DeviceInfo[];
-          if (devices) {
+          if (devices && devices.length > 0) {
             const existing = await ExtensionStorage.getDeviceList();
+            
+            const peerId = devices[0].deviceId;
+            const existingPeer = existing.find(d => d.deviceId === peerId);
+            if (existingPeer && existingPeer.revoked) {
+               await transport.send(JSON.stringify({ type: "error", payload: { message: "Device connection rejected (revoked)." } } satisfies SyncMessage));
+               transport.close();
+               reject(new Error("The host phone has been revoked."));
+               return;
+            }
+            
+            const selfDeviceId = await ExtensionStorage.getDeviceId();
+            const selfRevoked = devices.find(d => d.deviceId === selfDeviceId && d.revoked);
+            if (selfRevoked) {
+              await ExtensionStorage.wipeAll();
+              await transport.send(JSON.stringify({ type: "error", payload: { message: "This device has been revoked and wiped itself." } } satisfies SyncMessage));
+              transport.close();
+              reject(new Error("This browser extension was revoked from the vault."));
+              return;
+            }
+            
             const byId = new Map(existing.map((d) => [d.deviceId, d]));
             for (const phoneDevice of devices) {
               const current = byId.get(phoneDevice.deviceId);
@@ -161,6 +184,9 @@ export async function runSyncProtocol(
                 if (phoneDevice.revoked) {
                   current.revoked = true;
                 }
+                if (phoneDevice.displayName && phoneDevice.displayName !== current.displayName) {
+                  current.displayName = phoneDevice.displayName;
+                }
               }
             }
             await ExtensionStorage.saveDeviceList(Array.from(byId.values()));
@@ -170,7 +196,7 @@ export async function runSyncProtocol(
         }
         case "done": {
           transport.close();
-          resolve({ pulled, pushed });
+          resolve({ pulled, pushed, rotated: hasRotated });
           return;
         }
         case "error": {
@@ -178,6 +204,50 @@ export async function runSyncProtocol(
           reject(new Error((message.payload.message as string) ?? "Unknown sync error"));
           break;
         }
+        case "vekRotation": {
+          const wrappedNewVekBase64 = message.payload.wrappedNewVek as string | undefined;
+          if (!wrappedNewVekBase64) break;
+          const currentAuthKey = await deriveSyncAuthKey(vek);
+          try {
+            const newVek = await unwrapVek(wrappedNewVekBase64, currentAuthKey);
+            
+            const rawLocalKey = await ExtensionStorage.getDeviceLocalKeyRaw();
+            if (!rawLocalKey) throw new Error("No device local key");
+            const rawLocalKeyBytes = Uint8Array.from(atob(rawLocalKey), (c) => c.charCodeAt(0));
+            const deviceLocalKey = await crypto.subtle.importKey("raw", rawLocalKeyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+            
+            const allEntries = await ExtensionStorage.getAllEntries();
+            const reencrypted: EncryptedEntryRecord[] = [];
+            for (const entry of allEntries) {
+              const websiteName = await decryptString(entry.encryptedWebsiteName, vek);
+              const websiteUrl = await decryptString(entry.encryptedWebsiteUrl, vek);
+              const username = await decryptString(entry.encryptedUsername, vek);
+              const password = await decryptString(entry.encryptedPassword, vek);
+              
+              reencrypted.push({
+                ...entry,
+                encryptedWebsiteName: await encryptString(websiteName, newVek),
+                encryptedWebsiteUrl: await encryptString(websiteUrl, newVek),
+                encryptedUsername: await encryptString(username, newVek),
+                encryptedPassword: await encryptString(password, newVek),
+              });
+            }
+            await ExtensionStorage.saveAllEntries(reencrypted);
+            
+            const newWrapped = await wrapVek(newVek, deviceLocalKey);
+            await ExtensionStorage.saveWrappedVek(newWrapped);
+            
+            vek = newVek;
+            hasRotated = true;
+            await transport.send(JSON.stringify({ type: "vekRotationAck", payload: {} } satisfies SyncMessage));
+          } catch (e) {
+             console.error("VEK rotation apply failed", e);
+             await transport.send(JSON.stringify({ type: "error", payload: { message: "Rotation failed" } } satisfies SyncMessage));
+          }
+          break;
+        }
+        case "vekRotationAck":
+          break;
       }
     } catch (e) {
       transport.close();
@@ -197,11 +267,11 @@ export async function runSyncProtocol(
       transport.close();
       if (!handshakeConfirmed) {
         reject(new Error(
-          "Connected, but your phone never completed the handshake. Check that PeerVault is open, " +
+          "Connected, but your phone never completed the handshake. Check that JanusVault is open, " +
           "the vault is unlocked there, and \"Make this device visible for sync\" is on."
         ));
       } else {
-        resolve({ pulled, pushed });
+        resolve({ pulled, pushed, rotated: hasRotated });
       }
     }, 8000);
   };

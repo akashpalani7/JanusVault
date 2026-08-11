@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'package:cryptography/cryptography.dart';
+
 import '../crypto/crypto_engine.dart';
 import '../models/trusted_device.dart';
 import '../storage/secure_key_store.dart';
@@ -19,14 +22,14 @@ class PairingPackage {
       required this.wrappedVekForTransitBase64});
 
   /// Encodes as a single string suitable for a QR code or manual typing:
-  /// "peervault-pair:v2:<code>:<wrappedVek>"
+  /// "janusvault-pair:v2:<code>:<wrappedVek>"
   String encode() =>
-      'peervault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
+      'janusvault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
 
   static PairingPackage decode(String raw) {
     final parts = raw.split(':');
-    if (parts.length != 4 || parts[0] != 'peervault-pair' || parts[1] != 'v2') {
-      throw const FormatException('Not a valid PeerVault pairing code');
+    if (parts.length != 4 || parts[0] != 'janusvault-pair' || parts[1] != 'v2') {
+      throw const FormatException('Not a valid JanusVault pairing code');
     }
     return PairingPackage(
         pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3]);
@@ -212,6 +215,10 @@ class DeviceManager {
           existing.lastSyncedAt = info.lastSyncedAt;
           changed = true;
         }
+        if (info.displayName != existing.displayName && info.displayName.isNotEmpty) {
+          existing.displayName = info.displayName;
+          changed = true;
+        }
         if (changed) await _db.upsertDevice(existing);
       }
     }
@@ -262,20 +269,33 @@ class DeviceManager {
   /// must also re-persist every vault entry with the new VEK via
   /// VaultRepository (re-encrypting all data is the caller's job, not
   /// this method's, since it may want to show progress for a large vault).
-  Future<void> rotateVek({required String selfDeviceId}) async {
+  Future<SecretKey> rotateVek({required String selfDeviceId}) async {
     final engine = CryptoEngine.instance;
+    final oldVek = VaultSession.instance.vek;
+    
     final newVek = await engine.generateVek();
-    VaultSession.instance.installVekDirectly(newVek);
 
     final deviceLocalKey = await SecureKeyStore.instance.loadDeviceLocalKey();
     if (deviceLocalKey == null) throw StateError('No local device key found');
-    final wrapped =
-        await engine.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey);
+    final wrapped = await engine.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey);
 
     final record = _db.findDeviceById(selfDeviceId);
     if (record != null) {
       record.wrappedVekBase64 = wrapped.toBase64();
       await _db.upsertDevice(record);
     }
+    
+    final oldAuthKey = await engine.deriveSyncAuthKey(oldVek);
+    final wrappedForSync = await engine.wrapKey(keyToWrap: newVek, wrappingKey: oldAuthKey);
+    final oldAuthKeyBytes = await oldAuthKey.extractBytes();
+    
+    final settings = _db.settings;
+    if (settings != null) {
+      settings.queuedRotationOldSyncAuthKeyBase64 = base64Encode(oldAuthKeyBytes);
+      settings.queuedRotationWrappedNewVekBase64 = wrappedForSync.toBase64();
+      await _db.saveSettings(settings);
+    }
+    
+    return newVek;
   }
 }

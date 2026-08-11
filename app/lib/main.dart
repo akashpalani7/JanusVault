@@ -24,6 +24,7 @@ import 'core/sync/ble_gatt_service.dart';
 import 'core/sync/lan_sync_service.dart';
 import 'features/unlock/setup_screen.dart';
 import 'features/unlock/unlock_screen.dart';
+import 'core/theme/app_theme.dart';
 
 @pragma('vm:entry-point')
 void autofillMain() {
@@ -58,7 +59,7 @@ Future<void> main() async {
 
     if (context == null || isBackground) {
       final completer = Completer<bool>();
-      const channel = MethodChannel('com.peervault.app/main_auth');
+      const channel = MethodChannel('com.janusvault.app/main_auth');
       channel.setMethodCallHandler((call) async {
         if (call.method == 'resolveApproval') {
           if (!completer.isCompleted) {
@@ -78,7 +79,7 @@ Future<void> main() async {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Approve from your browser?'),
         content: Text(
-            'Your PeerVault browser extension wants to $actionLabel. Approve on this phone?'),
+            'Your JanusVault browser extension wants to $actionLabel. Approve on this phone?'),
         actions: [
           TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -106,7 +107,7 @@ Future<void> main() async {
       // In the future, we could add a `showPairingNotification` channel, but for now we must explicitly fail
       // so the PC doesn't hang!
       throw Exception(
-          "Cannot authorize new device pairing while the app is in the background. Please open PeerVault on your phone and try again.");
+          "Cannot authorize new device pairing while the app is in the background. Please open JanusVault on your phone and try again.");
     }
 
     final wantsToApprove = await showDialog<bool>(
@@ -156,25 +157,19 @@ Future<void> main() async {
   BleGattService.instance.onPairingRequested =
       LanSyncService.instance.onPairingRequested;
 
-  runApp(const ProviderScope(child: PeerVaultApp()));
+  runApp(const ProviderScope(child: JanusVaultApp()));
 }
 
-class PeerVaultApp extends StatelessWidget {
-  const PeerVaultApp({super.key});
+class JanusVaultApp extends StatelessWidget {
+  const JanusVaultApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: rootNavigatorKey,
-      title: 'PeerVault',
-      theme: ThemeData(
-          colorSchemeSeed: Colors.indigo,
-          useMaterial3: true,
-          brightness: Brightness.light),
-      darkTheme: ThemeData(
-          colorSchemeSeed: Colors.indigo,
-          useMaterial3: true,
-          brightness: Brightness.dark),
+      title: 'JanusVault',
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
       home: const _RootRouter(),
     );
   }

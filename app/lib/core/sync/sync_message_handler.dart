@@ -6,7 +6,9 @@ import 'package:cryptography/cryptography.dart';
 
 import '../crypto/crypto_engine.dart';
 import '../devices/device_manager.dart';
+import '../storage/secure_key_store.dart';
 import '../storage/vault_database.dart';
+import '../vault/vault_repository.dart';
 import '../vault/vault_session.dart';
 import 'sync_protocol.dart';
 
@@ -77,7 +79,23 @@ class SyncConnectionHandler {
     final authKey = await CryptoEngine.instance.deriveSyncAuthKey(v);
     final expectedMac = await CryptoEngine.instance.hmacSha256(authKey, sentNonce);
     final actualMac = base64Decode(macBase64);
-    final valid = expectedMac.length == actualMac.length && _constantTimeEquals(expectedMac, actualMac);
+    var valid = expectedMac.length == actualMac.length && _constantTimeEquals(expectedMac, actualMac);
+    
+    if (!valid && _db.settings?.queuedRotationOldSyncAuthKeyBase64 != null) {
+      final oldKeyBytes = base64Decode(_db.settings!.queuedRotationOldSyncAuthKeyBase64!);
+      final oldAuthKey = SecretKey(oldKeyBytes);
+      final expectedMacOld = await CryptoEngine.instance.hmacSha256(oldAuthKey, sentNonce);
+      if (expectedMacOld.length == actualMac.length && _constantTimeEquals(expectedMacOld, actualMac)) {
+        valid = true;
+        // Peer authenticated but has the old key. Queue the rotation message immediately.
+        transport.send(SyncMessage(SyncMsgType.vekRotation, {
+          'wrappedNewVek': _db.settings!.queuedRotationWrappedNewVekBase64,
+          'rotationTimestamp': DateTime.now().toUtc().toIso8601String(),
+          'rotatedByDeviceId': _db.settings!.selfDeviceId,
+        }).encode());
+      }
+    }
+    
     authenticated = valid;
     if (!_authCompleter.isCompleted) _authCompleter.complete(valid);
     if (!valid) _fail();
@@ -172,10 +190,27 @@ class SyncConnectionHandler {
 
       case SyncMsgType.deviceInfo:
         final rawDevices = message.payload['devices'] as List?;
-        if (rawDevices == null) break;
+        if (rawDevices == null || rawDevices.isEmpty) break;
         final infos = rawDevices
             .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
             .toList();
+            
+        final peerId = infos.first.deviceId;
+        final existingPeer = _db.findDeviceById(peerId);
+        if (existingPeer != null && existingPeer.revoked) {
+          transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
+          await transport.close();
+          return;
+        }
+        
+        final selfInfo = infos.where((d) => d.deviceId == _db.settings?.selfDeviceId).firstOrNull;
+        if (selfInfo != null && selfInfo.revoked) {
+          await _db.wipeAll();
+          transport.send(SyncMessage(SyncMsgType.error, {'message': 'This device has been revoked and wiped itself.'}).encode());
+          await transport.close();
+          return;
+        }
+
         await DeviceManager.instance.mergeIncomingDeviceInfos(infos);
         break;
 
@@ -204,6 +239,29 @@ class SyncConnectionHandler {
       case SyncMsgType.pairingSuccess:
       case SyncMsgType.error:
       case SyncMsgType.authResponse:
+        break;
+
+      case SyncMsgType.vekRotation:
+        final wrappedNewVekBase64 = message.payload['wrappedNewVek'] as String?;
+        if (wrappedNewVekBase64 == null) break;
+        final currentAuthKey = await CryptoEngine.instance.deriveSyncAuthKey(vek!);
+        final blob = EncryptedBlob.fromBase64(wrappedNewVekBase64);
+        try {
+          final newVek = await CryptoEngine.instance.unwrapKey(wrapped: blob, wrappingKey: currentAuthKey);
+          await VaultRepository.instance.reencryptAllWithNewVek(newVek);
+          final deviceLocalKey = await SecureKeyStore.instance.loadDeviceLocalKey();
+          final wrappedForStorage = await CryptoEngine.instance.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey!);
+          final record = _db.findDeviceById(_db.settings!.selfDeviceId);
+          record!.wrappedVekBase64 = wrappedForStorage.toBase64();
+          await _db.upsertDevice(record);
+          transport.send(SyncMessage(SyncMsgType.vekRotationAck, {}).encode());
+        } catch (e) {
+          transport.send(SyncMessage(SyncMsgType.error, {'message': 'Key rotation failed.'}).encode());
+        }
+        break;
+
+      case SyncMsgType.vekRotationAck:
+        // Peer acknowledged rotation.
         break;
     }
   }

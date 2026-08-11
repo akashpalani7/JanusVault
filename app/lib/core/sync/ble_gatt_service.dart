@@ -8,10 +8,10 @@ import '../vault/vault_session.dart';
 import 'sync_message_handler.dart';
 import 'sync_protocol.dart';
 
-/// PeerVault BLE GATT service UUID — custom 128-bit UUID for discovery.
+/// JanusVault BLE GATT service UUID — custom 128-bit UUID for discovery.
 /// Both the phone (GATT server/peripheral) and browser extension (GATT
 /// client/central via Web Bluetooth) use this to find each other.
-const String kPeerVaultBleServiceUuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+const String kJanusVaultBleServiceUuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
 /// Read/write/notify characteristic for exchanging SyncMessage JSON.
 /// Messages are chunked into BLE-sized packets and reassembled.
@@ -63,7 +63,7 @@ class BleGattService {
   //  Start / stop GATT advertising
   // -------------------------------------------------------------------
 
-  /// Starts advertising PeerVault's BLE GATT service so PC browsers
+  /// Starts advertising JanusVault's BLE GATT service so PC browsers
   /// can discover and connect to sync.
   Future<void> startAdvertising({required String deviceDisplayName}) async {
     if (_isAdvertising) return;
@@ -76,7 +76,7 @@ class BleGattService {
         // Add our custom sync service + characteristic
         await BlePeripheral.addService(
           BleService(
-            uuid: kPeerVaultBleServiceUuid,
+            uuid: kJanusVaultBleServiceUuid,
             primary: true,
             characteristics: [
               BleCharacteristic(
@@ -114,13 +114,13 @@ class BleGattService {
 
       // Start advertising
       await BlePeripheral.startAdvertising(
-        services: [kPeerVaultBleServiceUuid],
+        services: [kJanusVaultBleServiceUuid],
         localName: null,
       );
 
       _isAdvertising = true;
       print(
-          'BleGattService: Advertising started as PeerVault-$deviceDisplayName');
+          'BleGattService: Advertising started as JanusVault-$deviceDisplayName');
     } catch (e) {
       String errMsg = e.toString();
       if (errMsg.contains('UnsupportedOperationException')) {
@@ -293,7 +293,7 @@ class _BleTransport implements SyncTransport {
     _queue.add(() async {
       // Fast-bounce delay: Windows GATT stack often drops incoming notifications
       // if they arrive within ~100ms of a successful Write operation finishing.
-      // E.g. PC Writes pairingRequest -> Flutter gets it -> Flutter Notifies instantly -> 
+      // E.g. PC Writes pairingRequest -> Flutter gets it -> Flutter Notifies instantly ->
       // PC drops it because its GATT client is still resolving the Write ACK.
       await Future.delayed(const Duration(milliseconds: 250));
       await BleGattService._sendChunkedNotification(deviceId, jsonMessage);

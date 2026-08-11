@@ -5,7 +5,7 @@ set "PROJECT_DIR=%~dp0"
 set "APK_RELEASE=%PROJECT_DIR%app\build\app\outputs\flutter-apk\app-release.apk"
 set "APK_DEBUG=%PROJECT_DIR%app\build\app\outputs\flutter-apk\app-debug.apk"
 set "EXTENSION_DIR=%PROJECT_DIR%extension\dist"
-set "ZIP_OUT=%PROJECT_DIR%PeerVault_TestingBuild.zip"
+set "ZIP_OUT=%PROJECT_DIR%JanusVault_TestingBuild.zip"
 
 echo [1] Checking for Android APK...
 set "TARGET_APK="
@@ -30,15 +30,15 @@ if not exist "%EXTENSION_DIR%" (
 )
 
 echo [3] Preparing staging directory...
-set "STAGING_DIR=%PROJECT_DIR%temp_peervault_staging"
+set "STAGING_DIR=%PROJECT_DIR%temp_janusvault_staging"
 if exist "%STAGING_DIR%" rmdir /s /q "%STAGING_DIR%"
 mkdir "%STAGING_DIR%"
 
 echo Copied App...
-copy "%TARGET_APK%" "%STAGING_DIR%\PeerVault_Android.apk" >nul
+copy "%TARGET_APK%" "%STAGING_DIR%\JanusVault_Android.apk" >nul
 
 echo Copied Extension...
-xcopy "%EXTENSION_DIR%" "%STAGING_DIR%\PeerVault_Extension" /E /I /H /Y >nul
+xcopy "%EXTENSION_DIR%" "%STAGING_DIR%\JanusVault_Extension" /E /I /H /Y >nul
 
 echo Copied Testing Guide...
 copy "%PROJECT_DIR%Testing_Guide.md" "%STAGING_DIR%\Testing_Guide.md" >nul

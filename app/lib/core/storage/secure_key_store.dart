@@ -20,7 +20,7 @@ class SecureKeyStore {
     iOptions: _iosOptions,
   );
 
-  static const _kDeviceLocalKey = 'peervault.device_local_key';
+  static const _kDeviceLocalKey = 'janusvault.device_local_key';
 
   Future<void> saveDeviceLocalKey(SecretKey key) async {
     final bytes = await key.extractBytes();

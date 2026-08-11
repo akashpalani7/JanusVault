@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.content.Context
 import android.content.Intent
@@ -8,20 +8,20 @@ import android.service.quicksettings.TileService
 
 /**
  * The quick-settings-shade toggle you get by long-pressing the shade and
- * dragging "PeerVault listening" in, the same way WiFi/Bluetooth/mobile
- * data tiles work. Starts/stops PeerVaultSyncForegroundService — this
+ * dragging "JanusVault listening" in, the same way WiFi/Bluetooth/mobile
+ * data tiles work. Starts/stops JanusVaultSyncForegroundService — this
  * class holds no vault logic of its own.
  */
-class PeerVaultQuickTileService : TileService() {
+class JanusVaultQuickTileService : TileService() {
     companion object {
-        private const val PREFS = "peervault_tile_prefs"
+        private const val PREFS = "janusvault_tile_prefs"
         private const val KEY_LISTENING = "listening"
 
         fun isListening(context: Context): Boolean = prefs(context).getBoolean(KEY_LISTENING, false)
 
         fun setListening(context: Context, value: Boolean) {
             prefs(context).edit().putBoolean(KEY_LISTENING, value).apply()
-            TileService.requestListeningState(context, android.content.ComponentName(context, PeerVaultQuickTileService::class.java))
+            TileService.requestListeningState(context, android.content.ComponentName(context, JanusVaultQuickTileService::class.java))
         }
 
         private fun prefs(context: Context): SharedPreferences =
@@ -37,11 +37,11 @@ class PeerVaultQuickTileService : TileService() {
         super.onClick()
         val turningOn = !isListening(applicationContext)
         setListening(applicationContext, turningOn)
-        val intent = Intent(applicationContext, PeerVaultSyncForegroundService::class.java)
+        val intent = Intent(applicationContext, JanusVaultSyncForegroundService::class.java)
         if (turningOn) {
             startForegroundService(intent)
         } else {
-            intent.action = PeerVaultSyncForegroundService.ACTION_STOP
+            intent.action = JanusVaultSyncForegroundService.ACTION_STOP
             startService(intent)
         }
         updateTile()
@@ -51,7 +51,7 @@ class PeerVaultQuickTileService : TileService() {
         val tile = qsTile ?: return
         val listening = isListening(applicationContext)
         tile.state = if (listening) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "PeerVault listening"
+        tile.label = "JanusVault listening"
         tile.updateTile()
     }
 }

@@ -1,9 +1,9 @@
-package com.example.peervault
+package com.example.janusvault
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import com.example.peervault.app.ApprovalNotifier
+import com.example.janusvault.app.ApprovalNotifier
 
 class MainActivity : FlutterFragmentActivity() {
     companion object {
@@ -16,7 +16,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.peervault.app/main_auth")
+        val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.janusvault.app/main_auth")
         mainChannel = channel
         
         channel.setMethodCallHandler { call, result ->

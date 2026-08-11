@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.os.Bundle
 import androidx.biometric.BiometricPrompt
@@ -14,7 +14,7 @@ import java.util.concurrent.Executor
  * AutofillBridge.resolveApproval and this activity finishes right away.
  * There is no custom UI here beyond what BiometricPrompt itself draws.
  */
-class PeerVaultRemoteApprovalActivity : FragmentActivity() {
+class JanusVaultRemoteApprovalActivity : FragmentActivity() {
     companion object {
         const val EXTRA_ACTION_LABEL = "action_label"
     }
@@ -27,14 +27,14 @@ class PeerVaultRemoteApprovalActivity : FragmentActivity() {
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 AutofillBridge.resolveApproval(true)
-                com.example.peervault.MainActivity.resolveApproval(true)
+                com.example.janusvault.MainActivity.resolveApproval(true)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 AutofillBridge.resolveApproval(false)
-                com.example.peervault.MainActivity.resolveApproval(false)
+                com.example.janusvault.MainActivity.resolveApproval(false)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }
@@ -49,7 +49,7 @@ class PeerVaultRemoteApprovalActivity : FragmentActivity() {
         val prompt = BiometricPrompt(this, executor, callback)
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle("Approve from your browser?")
-            .setSubtitle("Your PeerVault browser extension wants to $actionLabel")
+            .setSubtitle("Your JanusVault browser extension wants to $actionLabel")
             .setAllowedAuthenticators(
                 androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or
                     androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL,

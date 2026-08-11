@@ -1,16 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_providers.dart';
 import '../../core/models/vault_entry.dart';
-import '../../core/vault/vault_session.dart';
-import '../backup/backup_screen.dart';
-import '../devices/devices_screen.dart';
-import '../recovery/recovery_screen.dart';
-import '../settings/settings_screen.dart';
-import '../sync/sync_screen.dart';
 import 'entry_editor_screen.dart';
-import 'recycle_bin_screen.dart';
 
 class VaultListScreen extends ConsumerStatefulWidget {
   const VaultListScreen({super.key});
@@ -21,11 +15,26 @@ class VaultListScreen extends ConsumerStatefulWidget {
 
 class _VaultListScreenState extends ConsumerState<VaultListScreen> {
   bool _autoSynced = false;
+  final ScrollController _scrollController = ScrollController();
+  bool _isFabExtended = true;
 
   @override
   void initState() {
     super.initState();
     _startAutoSync();
+    _scrollController.addListener(() {
+      if (_scrollController.position.userScrollDirection == ScrollDirection.reverse) {
+        if (_isFabExtended) setState(() => _isFabExtended = false);
+      } else if (_scrollController.position.userScrollDirection == ScrollDirection.forward) {
+        if (!_isFabExtended) setState(() => _isFabExtended = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _startAutoSync() async {
@@ -35,7 +44,7 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
     
     // Automatically make device visible for sync
     try {
-      await syncService.startAdvertisingAndServing(deviceDisplayName: 'PeerVault');
+      await syncService.startAdvertisingAndServing(deviceDisplayName: 'JanusVault');
     } catch (_) {}
 
     // Auto-discover and sync with peers
@@ -52,117 +61,197 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
     } catch (_) {}
   }
 
+  Color _getHashColor(String text) {
+    if (text.isEmpty) return Colors.grey;
+    int hash = 0;
+    for (var i = 0; i < text.length; i++) {
+      hash = text.codeUnitAt(i) + ((hash << 5) - hash);
+    }
+    final hue = (hash % 360).abs().toDouble();
+    return HSVColor.fromAHSV(1.0, hue, 0.6, 0.8).toColor();
+  }
+
+
+
   @override
   Widget build(BuildContext context) {
     ref.watch(dbListenerProvider);
     final entriesAsync = ref.watch(filteredEntriesProvider);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('PeerVault'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.sync),
-            tooltip: 'Sync devices',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SyncScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.devices_other),
-            tooltip: 'Trusted devices',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DevicesScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.shield_outlined),
-            tooltip: 'Recovery Kit',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Recycle Bin',
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecycleBinScreen())),
-          ),
-          IconButton(
-            icon: const Icon(Icons.lock),
-            tooltip: 'Lock vault',
-            onPressed: () {
-              VaultSession.instance.lock();
-              ref.read(vaultUnlockedProvider.notifier).state = false;
-              Navigator.of(context).popUntil((route) => route.isFirst);
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
+    return Stack(
+      children: [
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: SearchBar(
+                leading: const Icon(Icons.search, color: Colors.grey),
                 hintText: 'Search vault…',
-                border: OutlineInputBorder(),
+                elevation: WidgetStateProperty.all(2),
+                shape: WidgetStateProperty.all(
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                padding: WidgetStateProperty.all(const EdgeInsets.symmetric(horizontal: 16)),
+                onChanged: (value) => ref.read(searchQueryProvider.notifier).state = value,
+                trailing: [
+                  if (ref.watch(searchQueryProvider).isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        final FocusScopeNode currentFocus = FocusScope.of(context);
+                        if (!currentFocus.hasPrimaryFocus) {
+                          currentFocus.unfocus();
+                        }
+                        ref.read(searchQueryProvider.notifier).state = '';
+                      },
+                    ),
+                ],
               ),
-              onChanged: (value) => ref.read(searchQueryProvider.notifier).state = value,
             ),
-          ),
-          Expanded(
-            child: entriesAsync.when(
-              data: (entries) {
-                if (entries.isEmpty) {
-                  return const Center(child: Text('No saved passwords yet. Tap + to add one.'));
-                }
-                return ListView.builder(
-                  itemCount: entries.length,
-                  itemBuilder: (context, index) {
-                    final entry = entries[index];
-                    return ListTile(
-                      leading: CircleAvatar(child: Text(entry.websiteName.isNotEmpty ? entry.websiteName[0].toUpperCase() : '?')),
-                      title: Text(entry.websiteName),
-                      subtitle: Text(entry.username),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => EntryEditorScreen(existing: entry)),
+            Expanded(
+              child: entriesAsync.when(
+                data: (entries) {
+                  if (entries.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.vpn_key_off_outlined, size: 64, color: Colors.grey.withValues(alpha: 0.5)),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'No saved passwords yet.',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Tap + to add one.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
+                        ],
                       ),
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () async {
+                    );
+                  }
+                  return ListView.separated(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.only(bottom: 80),
+                    itemCount: entries.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: 4),
+                    itemBuilder: (context, index) {
+                      final entry = entries[index];
+                      final color = _getHashColor(entry.websiteName);
+                      final initial = entry.websiteName.isNotEmpty ? entry.websiteName[0].toUpperCase() : '?';
+                      
+                      return Dismissible(
+                        key: Key(entry.uuid),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: const Icon(Icons.delete, color: Colors.white),
+                        ),
+                        onDismissed: (direction) async {
                           await ref.read(vaultRepositoryProvider).softDeleteEntry(entry.uuid);
                           ref.invalidate(filteredEntriesProvider);
                         },
-                      ),
-                    );
-                  },
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, st) => Center(child: Text('Error: $err')),
-            ),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EntryEditorScreen()));
-          ref.invalidate(filteredEntriesProvider);
-        },
-        child: const Icon(Icons.add),
-      ),
-      bottomNavigationBar: BottomAppBar(
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            TextButton.icon(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BackupScreen())),
-              icon: const Icon(Icons.import_export),
-              label: const Text('Backup / Restore'),
+                        child: Card(
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                          elevation: 1,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => EntryEditorScreen(existing: entry)),
+                            ).then((_) => ref.invalidate(filteredEntriesProvider)),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                              child: Row(
+                                children: [
+                                  Hero(
+                                    tag: 'icon_${entry.uuid}',
+                                    child: Container(
+                                      width: 48,
+                                      height: 48,
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [color.withValues(alpha: 0.7), color],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          initial,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 16),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          entry.websiteName.isEmpty ? 'Unknown' : entry.websiteName,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        if (entry.username.isNotEmpty) ...[
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            entry.username,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.7) ?? Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                  const Icon(Icons.chevron_right, color: Colors.grey),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (err, st) => Center(child: Text('Error: $err')),
+              ),
             ),
           ],
         ),
-      ),
+        Positioned(
+          bottom: 16,
+          right: 16,
+          child: FloatingActionButton.extended(
+            heroTag: null,
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EntryEditorScreen()));
+              ref.invalidate(filteredEntriesProvider);
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('Add Login'),
+            isExtended: _isFabExtended,
+          ),
+        ),
+      ],
     );
   }
 }

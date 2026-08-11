@@ -38,6 +38,48 @@ const pairingQrCanvas = document.getElementById("pairingQrCanvas") as HTMLCanvas
 const pairingOutputText = document.getElementById("pairingOutputText") as HTMLTextAreaElement;
 const copyPairingButton = document.getElementById("copyPairingButton") as HTMLButtonElement;
 
+// --- SNACKBAR INTERCEPT ROUTINE ---
+const snackbarEl = document.getElementById("snackbar") as HTMLDivElement;
+function showSnackbar(message: string, type: "error" | "success" | "info" = "info") {
+  snackbarEl.textContent = message;
+  snackbarEl.className = `snackbar show ${type === "error" ? "error" : ""}`;
+  setTimeout(() => {
+    snackbarEl.className = "snackbar hidden";
+  }, 4000);
+}
+
+[
+  document.getElementById("pairStatus"),
+  document.getElementById("syncStatus"),
+  document.getElementById("addEntryStatus"),
+  document.getElementById("importStatus")
+].forEach(el => {
+  if (!el) return;
+  const originalSet = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!.set!;
+  Object.defineProperty(el, 'textContent', {
+    set(v: string) {
+      if (v && (v.toLowerCase().includes('error') || v.toLowerCase().includes('failed') || v.toLowerCase().includes('cancelled') || v.toLowerCase().includes('required'))) {
+        showSnackbar(v, 'error');
+      }
+      originalSet.call(this, v);
+    }
+  });
+  
+  const originalHtmlSet = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')!.set!;
+  Object.defineProperty(el, 'innerHTML', {
+    set(v: string) {
+      if (v && (v.toLowerCase().includes('error') || v.toLowerCase().includes('failed') || v.toLowerCase().includes('cancelled') || v.toLowerCase().includes('required'))) {
+        // Strip HTML tags for snackbar
+        const temp = document.createElement("div");
+        temp.innerHTML = v;
+        showSnackbar(temp.textContent || v, 'error');
+      }
+      originalHtmlSet.call(this, v);
+    }
+  });
+});
+// ----------------------------------
+
 const mainNav = document.getElementById("mainNav") as HTMLElement;
 const navPasswords = document.getElementById("navPasswords") as HTMLButtonElement;
 const navDevices = document.getElementById("navDevices") as HTMLButtonElement;
@@ -81,7 +123,7 @@ let editUuid: string | null = null;
 const OUTCOME_MESSAGES: Record<string, string> = {
   denied: "Denied on your phone.",
   no_phone_configured: "Enter your phone's address above first.",
-  unreachable: "Couldn't reach your phone. Make sure PeerVault is open and \"Make this device visible for sync\" is on.",
+  unreachable: "Couldn't reach your phone. Make sure JanusVault is open and \"Make this device visible for sync\" is on.",
   timeout: "Timed out waiting for approval on your phone.",
   locked: "This browser isn't paired with a vault.",
   not_found: "That entry no longer exists.",
@@ -137,18 +179,40 @@ async function renderDevices() {
   devicesEmptyHint.classList.toggle("hidden", others.length > 0);
   for (const d of others) {
     const li = document.createElement("li");
+    li.style.display = "flex";
+    li.style.alignItems = "center";
+    li.style.gap = "12px";
+
+    const iconDiv = document.createElement("div");
+    iconDiv.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-smartphone"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>`;
+    iconDiv.style.display = "flex";
+    iconDiv.style.alignItems = "center";
+    iconDiv.style.justifyContent = "center";
+    iconDiv.style.color = "var(--primary)";
+
+    const info = document.createElement("div");
+    info.style.display = "flex";
+    info.style.flexDirection = "column";
+
     const name = document.createElement("div");
     name.className = "device-name";
     name.textContent = d.displayName + (d.revoked ? " (revoked)" : "");
+    name.style.fontWeight = "600";
+    
     const meta = document.createElement("div");
     meta.className = "device-meta";
-    meta.textContent = `${d.platform} • last synced ${new Date(d.lastSyncedAt).toLocaleString()}`;
-    li.append(name, meta);
+    meta.textContent = `last synced ${new Date(d.lastSyncedAt).toLocaleString()}`;
+    meta.style.fontSize = "12px";
+    meta.style.color = "var(--text-secondary)";
+
+    info.append(name, meta);
+    li.append(iconDiv, info);
     devicesList.appendChild(li);
   }
 }
 
 function renderEntries(entries: EntryMeta[]) {
+  document.querySelectorAll(".kebab-dropdown").forEach((el) => el.remove());
   resultsList.innerHTML = "";
   emptyHint.classList.toggle("hidden", entries.length > 0);
 
@@ -166,37 +230,79 @@ function renderEntries(entries: EntryMeta[]) {
     info.append(title, subtitle);
 
     const actions = document.createElement("div");
-    actions.className = "entry-actions";
+    actions.className = "entry-actions kebab-menu";
 
     const fillButton = document.createElement("button");
     fillButton.textContent = "Autofill";
     fillButton.title = "Ask your phone to approve filling this into the current page";
     fillButton.addEventListener("click", () => handleAutofill(entry, fillButton));
 
+    const kebabBtn = document.createElement("button");
+    kebabBtn.className = "kebab-btn";
+    
+    const dropdown = document.createElement("div");
+    dropdown.className = "kebab-dropdown hidden";
+    
+    kebabBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isHidden = dropdown.classList.contains("hidden");
+      
+      document.querySelectorAll(".kebab-dropdown").forEach((el) => el.classList.add("hidden"));
+      
+      if (isHidden) {
+        const rect = kebabBtn.getBoundingClientRect();
+        const popupHeight = window.innerHeight;
+        
+        dropdown.style.position = "fixed";
+        dropdown.style.right = `${document.body.clientWidth - rect.right}px`;
+        
+        dropdown.classList.remove("drop-up", "drop-down");
+        if (rect.bottom > popupHeight - 120) {
+          dropdown.classList.add("drop-up");
+          dropdown.style.top = "auto";
+          dropdown.style.bottom = `${popupHeight - rect.top + 4}px`;
+        } else {
+          dropdown.classList.add("drop-down");
+          dropdown.style.bottom = "auto";
+          dropdown.style.top = `${rect.bottom + 4}px`;
+        }
+        dropdown.classList.remove("hidden");
+      }
+    });
+
     const copyButton = document.createElement("button");
-    copyButton.className = "secondary";
+    copyButton.className = "kebab-dropdown-item";
     copyButton.textContent = "Copy";
     copyButton.title = "Ask your phone to approve copying this password";
-    copyButton.addEventListener("click", () => handleCopy(entry, copyButton));
+    copyButton.addEventListener("click", () => {
+      dropdown.classList.add("hidden");
+      handleCopy(entry, copyButton);
+    });
 
     const editButton = document.createElement("button");
-    editButton.className = "secondary";
+    editButton.className = "kebab-dropdown-item";
     editButton.textContent = "Edit";
     editButton.title = "Ask your phone to approve editing this entry";
-    editButton.addEventListener("click", () => handleEdit(entry, editButton));
+    editButton.addEventListener("click", () => {
+      dropdown.classList.add("hidden");
+      handleEdit(entry, editButton);
+    });
 
     const deleteButton = document.createElement("button");
-    deleteButton.className = "secondary";
+    deleteButton.className = "kebab-dropdown-item danger text-red";
     deleteButton.textContent = "Delete";
     deleteButton.title = "Move to recycle bin";
     deleteButton.addEventListener("click", async () => {
+      dropdown.classList.add("hidden");
       deleteButton.disabled = true;
       syncStatus.textContent = `Moved to recycle bin.`;
       await chrome.runtime.sendMessage({ type: "SET_DELETED_STATUS", uuid: entry.uuid, deleted: true });
       await runSearch(searchInput.value);
     });
 
-    actions.append(fillButton, copyButton, editButton, deleteButton);
+    dropdown.append(copyButton, editButton, deleteButton);
+    actions.append(fillButton, kebabBtn);
+    document.body.appendChild(dropdown);
     li.append(info, actions);
     resultsList.appendChild(li);
   }
@@ -292,7 +398,6 @@ async function renderRecycleBin() {
 
     const kebabBtn = document.createElement("button");
     kebabBtn.className = "kebab-btn";
-    kebabBtn.innerHTML = "&#8942;"; 
     
     const dropdown = document.createElement("div");
     dropdown.className = "kebab-dropdown hidden";
@@ -411,9 +516,14 @@ syncBleButton.addEventListener("click", async () => {
 
 pairButton.addEventListener("click", async () => {
   const value = pairingInput.value.trim();
+  const name = deviceNameInput.value.trim();
   if (!value) return;
+  if (!name) {
+    pairStatus.textContent = "Error: Device name is required";
+    return;
+  }
   pairStatus.textContent = "Pairing…";
-  const response = await chrome.runtime.sendMessage({ type: "COMPLETE_PAIRING", payload: value, deviceName: deviceNameInput.value });
+  const response = await chrome.runtime.sendMessage({ type: "COMPLETE_PAIRING", payload: value, deviceName: name });
   if (response.paired) {
     pairStatus.textContent = "Paired!";
     await refreshStatus();
@@ -428,7 +538,11 @@ lanPairButton.addEventListener("click", async () => {
     pairStatus.textContent = "Error: Please enter the phone's IP (e.g. 192.168.1.5:51827)";
     return;
   }
-  const name = deviceNameInput.value.trim() || "Paired Browser";
+  const name = deviceNameInput.value.trim();
+  if (!name) {
+    pairStatus.textContent = "Error: Device name is required";
+    return;
+  }
   const parts = rawHost.split(":");
   const host = parts[0];
   const port = parseInt(parts[1] || "51827", 10);
@@ -476,7 +590,11 @@ lanPairButton.addEventListener("click", async () => {
 });
 
 blePairButton.addEventListener("click", async () => {
-  const name = deviceNameInput.value.trim() || "Paired Browser";
+  const name = deviceNameInput.value.trim();
+  if (!name) {
+    pairStatus.textContent = "Error: Device name is required";
+    return;
+  }
 
   pairStatus.textContent = "Please select your phone in the popup window...";
   blePairButton.disabled = true;
@@ -773,7 +891,7 @@ const urlParamsExt = new URLSearchParams(window.location.search);
 if (urlParamsExt.get("mode") === "ble-pair") {
     document.body.innerHTML = `
         <div style="text-align:center; padding:24px; font-family: sans-serif;">
-            <h3 style="margin-top:0; font-size:18px;">Pair PeerVault via Bluetooth</h3>
+            <h3 style="margin-top:0; font-size:18px;">Pair JanusVault via Bluetooth</h3>
             <p style="font-size:14px; margin-bottom:24px; color:#555;">Click below and select your phone from the list.</p>
             <button id="blePairDialogBtn" style="padding:12px 24px; font-size:16px; background:#4b4bff; color:white; border:none; border-radius:6px; cursor:pointer; width:100%;">
                 Select Device
@@ -842,7 +960,7 @@ if (urlParamsExt.get("mode") === "ble-pair") {
   document.body.innerHTML = `
     <div style="padding: 20px; text-align: center;">
       <h2 style="font-size: 16px; margin-top: 20px;">Reconnecting to Phone</h2>
-      <p style="font-size: 13px; color: #666; margin-bottom: 20px; margin-top: 10px;">PeerVault needs permission to connect to your phone's randomized Bluetooth address to approve:<br><br><b style="font-size: 15px; color: #333;">${actionLabel}</b></p>
+      <p style="font-size: 13px; color: #666; margin-bottom: 20px; margin-top: 10px;">JanusVault needs permission to connect to your phone's randomized Bluetooth address to approve:<br><br><b style="font-size: 15px; color: #333;">${actionLabel}</b></p>
       <button id="reauthBtn" style="width: 100%; padding: 10px; background: #4b4bff; color: white; border: none; border-radius: 6px; cursor: pointer;">Select Phone</button>
       <p id="reauthStatus" style="margin-top: 10px; font-size: 12px;"></p>
     </div>
@@ -852,9 +970,9 @@ if (urlParamsExt.get("mode") === "ble-pair") {
      const stat = document.getElementById("reauthStatus")!;
      try {
        stat.textContent = "Requesting device picker...";
-       const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+       const JANUSVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
        await (navigator as any).bluetooth.requestDevice({
-         filters: [{ services: [PEERVAULT_SERVICE_UUID] }]
+         filters: [{ services: [JANUSVAULT_SERVICE_UUID] }]
        });
        stat.textContent = "Authorized. Processing request...";
        

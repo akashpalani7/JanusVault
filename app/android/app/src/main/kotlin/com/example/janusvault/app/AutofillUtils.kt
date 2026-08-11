@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.app.PendingIntent
 import android.content.Context
@@ -38,7 +38,7 @@ object AutofillUtils {
     ): InlinePresentation? {
         val isInlineCompatible = UiVersions.getVersions(spec.style).contains(UiVersions.INLINE_UI_VERSION_1)
         if (!isInlineCompatible) {
-            android.util.Log.w("PeerVault", "Autofill request INLINE_UI_VERSION_1 unsupported")
+            android.util.Log.w("JanusVault", "Autofill request INLINE_UI_VERSION_1 unsupported")
             return null
         }
         // Bitwarden explicitly uses a generic, empty service PendingIntent for the slice UI content
@@ -79,19 +79,19 @@ object AutofillUtils {
     ): Boolean {
         val passwordId = fields.passwordId ?: return false
 
-        val suggestPresentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD12 Generate strong password")
-            setTextViewText(com.example.peervault.R.id.subtitle, "PeerVault Generator")
+        val suggestPresentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
+            setTextViewText(com.example.janusvault.R.id.subtitle, "JanusVault Generator")
         }
 
         // Auth-gated: tapping the chip launches the generator activity
         // where the user can configure password length and character sets.
-        val genIntent = Intent(context, PeerVaultAutofillGeneratorActivity::class.java).apply {
-            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
-            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
-            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, fields.usernameId)
-            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
-            putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
+        val genIntent = Intent(context, JanusVaultAutofillGeneratorActivity::class.java).apply {
+            putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_QUERY, query)
+            putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
+            putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME_ID, fields.usernameId)
+            putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_PASSWORD_ID, passwordId)
+            putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_FOCUSED_ID, focusedId)
             if (inlineSpecs != null) {
                 putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
             }
@@ -146,7 +146,7 @@ object AutofillUtils {
             responseBuilder.addDataset(builder.build())
             return true
         } catch (e: Exception) {
-            android.util.Log.w("PeerVault", "Failed to build suggest dataset: ${e.message}")
+            android.util.Log.w("JanusVault", "Failed to build suggest dataset: ${e.message}")
             return false
         }
     }
@@ -163,12 +163,12 @@ object AutofillUtils {
         index: Int,
         focusedId: AutofillId?,
     ): Dataset {
-        val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.peervault.R.id.title, websiteName)
+        val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.example.janusvault.R.id.title, websiteName)
             if (username.isNotBlank()) {
-                setTextViewText(com.example.peervault.R.id.subtitle, username)
+                setTextViewText(com.example.janusvault.R.id.subtitle, username)
             } else {
-                setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE)
+                setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE)
             }
         }
         val inlinePresentation = buildInlinePresentation(context, spec, websiteName, username)
@@ -228,12 +228,12 @@ object AutofillUtils {
         focusedId: AutofillId?,
     ): Dataset {
         val builder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
-        val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.peervault.R.id.title, websiteName)
+        val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.example.janusvault.R.id.title, websiteName)
             if (username.isNotBlank()) {
-                setTextViewText(com.example.peervault.R.id.subtitle, username)
+                setTextViewText(com.example.janusvault.R.id.subtitle, username)
             } else {
-                setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE)
+                setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE)
             }
         }
         

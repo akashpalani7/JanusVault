@@ -19,15 +19,15 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   bool _busy = false;
 
   Future<void> _export() async {
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _statusMessage = 'Preparing backup...';
+    });
     try {
       final bytes = Uint8List.fromList(ref.read(backupServiceProvider).exportBackupBytes());
-      final fileName = 'peervault_backup_${DateTime.now().millisecondsSinceEpoch}.pvault';
-      // saveFile() opens the OS's native "Save as" picker (Storage Access
-      // Framework on Android) so the user chooses a real, visible folder —
-      // Documents, Downloads, Drive, etc. — rather than this silently
-      // landing in the app's private data directory. Needs no storage
-      // permission on any platform.
+      final fileName = 'janusvault_backup_${DateTime.now().millisecondsSinceEpoch}.pvault';
+      setState(() => _statusMessage = 'Select location to save...');
+      
       final savedPath = await FilePicker.platform.saveFile(
         fileName: fileName,
         type: FileType.custom,
@@ -50,7 +50,11 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     final result = await FilePicker.platform.pickFiles(type: FileType.any);
     if (result == null || result.files.single.path == null) return;
 
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _statusMessage = 'Importing archive...';
+    });
+    
     try {
       await ref.read(backupServiceProvider).importBackup(result.files.single.path!, mode: mode);
       setState(() => _statusMessage = 'Restore complete (${mode.name} mode).');
@@ -64,33 +68,119 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Backup & Restore')),
+      appBar: AppBar(title: const Text('Backup & Restore', style: TextStyle(fontWeight: FontWeight.bold))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Export an encrypted .pvault archive of your entire vault.'),
-          const SizedBox(height: 8),
-          FilledButton.icon(
-            onPressed: _busy ? null : _export,
-            icon: const Icon(Icons.upload_file),
-            label: const Text('Export backup'),
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Theme.of(context).colorScheme.primaryContainer, borderRadius: BorderRadius.circular(12)),
+                        child: Icon(Icons.download, color: Theme.of(context).colorScheme.primary),
+                      ),
+                      const SizedBox(width: 16),
+                      Text('Export Vault', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Export an encrypted .pvault archive of your entire vault. This backup is fully offline and requires your biometrics/credentials to ever decrypt.',
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 24),
+                  FilledButton.icon(
+                    onPressed: _busy ? null : _export,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(56),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.save_alt),
+                    label: const Text('Save Backup File', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
           ),
-          const Divider(height: 32),
-          const Text('Restore from a .pvault file:'),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : () => _restore(RestoreMode.replace),
-            icon: const Icon(Icons.restore_page),
-            label: const Text('Replace vault entirely'),
+          const SizedBox(height: 16),
+          Card(
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(color: Theme.of(context).colorScheme.secondaryContainer, borderRadius: BorderRadius.circular(12)),
+                        child: Icon(Icons.upload, color: Theme.of(context).colorScheme.secondary),
+                      ),
+                      const SizedBox(width: 16),
+                      Text('Import Vault', style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Restore from a pre-existing .pvault file you previously exported.',
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: 24),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : () => _restore(RestoreMode.replace),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(56),
+                      side: BorderSide(color: Colors.red.withValues(alpha: 0.5)),
+                      foregroundColor: Colors.red,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.warning_amber),
+                    label: const Text('Replace existing vault entirely', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : () => _restore(RestoreMode.merge),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(56),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    icon: const Icon(Icons.merge),
+                    label: const Text('Merge into current vault', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : () => _restore(RestoreMode.merge),
-            icon: const Icon(Icons.merge),
-            label: const Text('Merge into current vault'),
-          ),
-          if (_busy) const Padding(padding: EdgeInsets.only(top: 16), child: CircularProgressIndicator()),
-          if (_statusMessage != null) Padding(padding: const EdgeInsets.only(top: 16), child: Text(_statusMessage!)),
+          if (_busy || _statusMessage != null) ...[
+            const SizedBox(height: 24),
+            Center(
+              child: Column(
+                children: [
+                  if (_busy) const CircularProgressIndicator(),
+                  if (_busy) const SizedBox(height: 16),
+                  if (_statusMessage != null) 
+                    Text(
+                      _statusMessage!, 
+                      style: TextStyle(
+                        color: _statusMessage!.contains('failed') ? Colors.red : Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -27,14 +27,14 @@ import androidx.annotation.RequiresApi
 import androidx.autofill.inline.UiVersions
 import androidx.autofill.inline.v1.InlineSuggestionUi
 import androidx.core.app.NotificationCompat
-import com.example.peervault.MainActivity
+import com.example.janusvault.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /**
- * PeerVault's Android Autofill Framework entry point.
+ * JanusVault's Android Autofill Framework entry point.
  *
  * Supports two rendering paths:
  *   1. **Inline Suggestions** (Android 11+ / API 30+): renders autofill
@@ -47,7 +47,7 @@ import org.json.JSONObject
  *
  * Both paths share the same matching + VEK/Dart bridge logic.
  */
-class PeerVaultAutofillService : AutofillService() {
+class JanusVaultAutofillService : AutofillService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main)
 
@@ -56,7 +56,7 @@ class PeerVaultAutofillService : AutofillService() {
         val structure = context.structure
         val fields = FieldFinder.find(structure)
 
-        android.util.Log.d("PeerVault", "onFillRequest: usernameId=${fields.usernameId}, passwordId=${fields.passwordId}, app=${fields.appIdentifier}")
+        android.util.Log.d("JanusVault", "onFillRequest: usernameId=${fields.usernameId}, passwordId=${fields.passwordId}, app=${fields.appIdentifier}")
 
         if (fields.usernameId == null && fields.passwordId == null) {
             callback.onSuccess(null)
@@ -84,7 +84,7 @@ class PeerVaultAutofillService : AutofillService() {
 
                     // STRICT PER-REQUEST AUTHENTICATION
                     // By unconditionally returning a locked dataset here, we force the Android 
-                    // Autofill Framework to demand user interaction (Unlock PeerVault -> Biometrics)
+                    // Autofill Framework to demand user interaction (Unlock JanusVault -> Biometrics)
                     // on EVERY new autofill session. The OS caches this chip during the active page.
                     // This prevents credentials from site B leaking instantly after unlocking site A.
 
@@ -102,13 +102,13 @@ class PeerVaultAutofillService : AutofillService() {
                         }
                     }
 
-                    val appIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
+                    val appIntent = Intent(applicationContext, JanusVaultAutofillAuthActivity::class.java).apply {
                         putExtra("notify_only", false)
-                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, query)
-                        putExtra(PeerVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
-                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
-                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
-                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_FOCUSED_ID, focusedId)
+                        putExtra(JanusVaultAutofillAuthActivity.EXTRA_QUERY, query)
+                        putExtra(JanusVaultAutofillGeneratorActivity.EXTRA_USERNAME, capturedUsername)
+                        putExtra(JanusVaultAutofillAuthActivity.EXTRA_USERNAME_ID, fields.usernameId)
+                        putExtra(JanusVaultAutofillAuthActivity.EXTRA_PASSWORD_ID, fields.passwordId)
+                        putExtra(JanusVaultAutofillAuthActivity.EXTRA_FOCUSED_ID, focusedId)
                         if (inlineSpecs != null) {
                             putParcelableArrayListExtra("inline_specs", ArrayList(inlineSpecs))
                         }
@@ -131,16 +131,16 @@ class PeerVaultAutofillService : AutofillService() {
                         .distinct()
                         .toTypedArray()
                     
-                    val presentation = RemoteViews(packageName, com.example.peervault.R.layout.autofill_remote_view).apply {
-                        setTextViewText(com.example.peervault.R.id.title, "\uD83D\uDD13 Unlock PeerVault")
-                        setViewVisibility(com.example.peervault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
+                    val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
+                        setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD13 Unlock JanusVault")
+                        setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
                     }
 
                     val authDatasetBuilder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
                     authDatasetBuilder.setAuthentication(pendingIntent.intentSender)
 
                     if (useInline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && inlineSpecs != null) {
-                        val inlinePresentation = AutofillUtils.buildInlinePresentation(applicationContext, v1Spec!!, "\uD83D\uDD13 Unlock PeerVault", "")
+                        val inlinePresentation = AutofillUtils.buildInlinePresentation(applicationContext, v1Spec!!, "\uD83D\uDD13 Unlock JanusVault", "")
                         inlinePresentation?.let {
                             authDatasetBuilder.setInlinePresentation(it)
                         }
@@ -188,7 +188,7 @@ class PeerVaultAutofillService : AutofillService() {
                     callback.onSuccess(responseBuilder.build())
                 }
             } catch (e: Exception) {
-                android.util.Log.e("PeerVault", "Autofill OS Timeout/Error: ${e.message}", e)
+                android.util.Log.e("JanusVault", "Autofill OS Timeout/Error: ${e.message}", e)
                 callback.onSuccess(null)
             }
         }
@@ -221,7 +221,7 @@ class PeerVaultAutofillService : AutofillService() {
         }
 
         if (password.isEmpty()) {
-            android.util.Log.e("PeerVault", "No password captured during save request")
+            android.util.Log.e("JanusVault", "No password captured during save request")
             android.widget.Toast.makeText(applicationContext, "Failed to extract password value", android.widget.Toast.LENGTH_SHORT).show()
             callback.onFailure("No password captured")
             return
@@ -230,9 +230,9 @@ class PeerVaultAutofillService : AutofillService() {
         serviceScope.launch {
             try {
                 if (!AutofillBridge.isUnlocked(applicationContext)) {
-                    val authIntent = Intent(applicationContext, PeerVaultAutofillAuthActivity::class.java).apply {
+                    val authIntent = Intent(applicationContext, JanusVaultAutofillAuthActivity::class.java).apply {
                         putExtra("save_request", true)
-                        putExtra(PeerVaultAutofillAuthActivity.EXTRA_QUERY, fields.appIdentifier)
+                        putExtra(JanusVaultAutofillAuthActivity.EXTRA_QUERY, fields.appIdentifier)
                         putExtra("save_username", username)
                         putExtra("save_password", password)
                         addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
@@ -254,10 +254,10 @@ class PeerVaultAutofillService : AutofillService() {
                 
                 val titleCasedName = fields.appIdentifier.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
                 AutofillBridge.saveCapturedCredential(applicationContext, titleCasedName, fields.appIdentifier, username, password)
-                android.widget.Toast.makeText(applicationContext, "Saved to PeerVault!", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(applicationContext, "Saved to JanusVault!", android.widget.Toast.LENGTH_SHORT).show()
                 callback.onSuccess()
             } catch (e: Exception) {
-                android.util.Log.e("PeerVault", "Save error: ${e.message}")
+                android.util.Log.e("JanusVault", "Save error: ${e.message}")
                 android.widget.Toast.makeText(applicationContext, "Save failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                 callback.onFailure(e.message)
             }

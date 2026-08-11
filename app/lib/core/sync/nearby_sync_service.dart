@@ -22,7 +22,7 @@ class NearbySyncService {
   NearbySyncService._();
   static final NearbySyncService instance = NearbySyncService._();
 
-  static const String _serviceId = 'com.peervault.nearby';
+  static const String _serviceId = 'com.janusvault.nearby';
   static const Strategy _strategy = Strategy.P2P_POINT_TO_POINT;
 
   bool _isAdvertising = false;
@@ -84,7 +84,7 @@ class NearbySyncService {
   }
 
   // -------------------------------------------------------------------
-  //  Discover (scan for nearby PeerVault Android devices)
+  //  Discover (scan for nearby JanusVault Android devices)
   // -------------------------------------------------------------------
 
   Future<bool> startDiscovery() async {
@@ -92,7 +92,7 @@ class NearbySyncService {
 
     try {
       final result = await Nearby().startDiscovery(
-        'PeerVault', // our name visible to peers
+        'JanusVault', // our name visible to peers
         _strategy,
         onEndpointFound: (id, name, serviceId) {
           print('NearbySyncService: Found peer $name ($id)');

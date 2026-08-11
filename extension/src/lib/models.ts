@@ -30,7 +30,7 @@ export interface RecordMeta {
   deleted: boolean;
 }
 
-export type SyncMsgType = "hello" | "helloResponse" | "deviceInfo" | "metadata" | "request" | "records" | "done" | "error" | "authRequest" | "authResponse" | "pairingRequest" | "pairingChallenge" | "pairingSuccess";
+export type SyncMsgType = "hello" | "helloResponse" | "deviceInfo" | "metadata" | "request" | "records" | "done" | "error" | "authRequest" | "authResponse" | "pairingRequest" | "pairingChallenge" | "pairingSuccess" | "vekRotation" | "vekRotationAck";
 
 export type SyncMessage =
   | { type: "hello"; payload: { nonce: string } }
@@ -45,7 +45,9 @@ export type SyncMessage =
   | { type: "authResponse"; payload: { requestId: string; approved: boolean } }
   | { type: "pairingRequest"; payload: { deviceName: string; pubKey: string; clientName?: string; platform?: string; deviceId?: string; } }
   | { type: "pairingChallenge"; payload: { pubKey: string } }
-  | { type: "pairingSuccess"; payload: { wrappedVek: string; device: DeviceInfo } };
+  | { type: "pairingSuccess"; payload: { wrappedVek: string; device: DeviceInfo } }
+  | { type: "vekRotation"; payload: { wrappedNewVek: string } }
+  | { type: "vekRotationAck"; payload: Record<string, never> };
 
 /** Mirrors DeviceInfo in sync_protocol.dart exactly — non-secret trusted
  * device metadata exchanged so the phone's "Trusted devices" list learns

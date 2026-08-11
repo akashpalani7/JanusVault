@@ -116,40 +116,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   List<List<String>> _parseCsv(String text) {
+    // Basic CSV parser...
     final List<List<String>> rows = [];
     List<String> row = [];
     String field = "";
     bool inQuotes = false;
 
     for (int i = 0; i < text.length; i++) {
-      final String c = text[i];
-      if (inQuotes) {
-        if (c == '"' && i + 1 < text.length && text[i + 1] == '"') {
-          field += '"';
-          i++;
+        final String c = text[i];
+        if (inQuotes) {
+            if (c == '"' && i + 1 < text.length && text[i + 1] == '"') {
+                field += '"';
+                i++;
+            } else if (c == '"') {
+                inQuotes = false;
+            } else {
+                field += c;
+            }
         } else if (c == '"') {
-          inQuotes = false;
+            inQuotes = true;
+        } else if (c == ',') {
+            row.add(field);
+            field = "";
+        } else if (c == '\n' || c == '\r') {
+            if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
+            row.add(field);
+            rows.add(row);
+            row = [];
+            field = "";
         } else {
-          field += c;
+            field += c;
         }
-      } else if (c == '"') {
-        inQuotes = true;
-      } else if (c == ',') {
-        row.add(field);
-        field = "";
-      } else if (c == '\n' || c == '\r') {
-        if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
-        row.add(field);
-        rows.add(row);
-        row = [];
-        field = "";
-      } else {
-        field += c;
-      }
     }
     if (field.isNotEmpty || row.isNotEmpty) {
-      row.add(field);
-      rows.add(row);
+        row.add(field);
+        rows.add(row);
     }
     return rows.where((r) => r.any((cell) => cell.trim().isNotEmpty)).toList();
   }
@@ -160,97 +161,137 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _load();
   }
 
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_loaded) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('Settings', style: TextStyle(fontWeight: FontWeight.bold))),
       body: ListView(
         children: [
-          SwitchListTile(
-            title: const Text('Require biometrics to reveal a password'),
-            value: _requireBiometricForReveal,
-            onChanged: (v) {
-              setState(() => _requireBiometricForReveal = v);
-              _save();
-            },
-          ),
-          ListTile(
-            title: const Text('Recycle Bin retention'),
-            subtitle: Text('$_retentionDays days'),
-            trailing: DropdownButton<int>(
-              value: _retentionDays,
-              items: const [7, 14, 30, 60, 90]
-                  .map((d) => DropdownMenuItem(value: d, child: Text('$d days')))
-                  .toList(),
-              onChanged: (v) async {
-                if (v == null || v == _retentionDays) return;
-
-                if (v < _retentionDays) {
-                  final cutoff = DateTime.now().toUtc().subtract(Duration(days: v));
-                  final all = await VaultRepository.instance.getAllEntries(includeDeleted: true);
-                  final affectedEntries = all.where((e) => e.deleted && e.lastUpdated.isBefore(cutoff)).toList();
-
-                  if (context.mounted) {
-                    late String dialogTitle;
-                    late String dialogContent;
-                    late String btnLabel;
-
-                    if (affectedEntries.isNotEmpty) {
-                      final names = affectedEntries.map((e) => e.websiteName).take(5).join(', ');
-                      final more = affectedEntries.length > 5 ? ' and ${affectedEntries.length - 5} more' : '';
-                      dialogTitle = 'Warning: Immediate Deletion';
-                      dialogContent = 'Decreasing the retention to $v days will instantly and permanently erase ${affectedEntries.length} items currently in the Recycle Bin:\n\n$names$more\n\nAre you sure you want to proceed?';
-                      btnLabel = 'Apply and Delete';
-                    } else {
-                      dialogTitle = 'Confirm Retention Decrease';
-                      dialogContent = 'Are you sure you want to decrease the time deleted passwords are kept to $v days? Future and existing deleted items will be purged sooner.';
-                      btnLabel = 'Apply';
-                    }
-
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (c) => AlertDialog(
-                        title: Text(dialogTitle),
-                        content: Text(dialogContent),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
-                          FilledButton(onPressed: () => Navigator.of(c).pop(true), child: Text(btnLabel)),
-                        ],
-                      ),
-                    );
-
-                    if (confirm != true) return;
-                  }
-                }
-
-                setState(() => _retentionDays = v);
-                await _save();
-                
-                final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: v);
-                if (purged > 0 && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Automatically purged $purged overdue entries.')));
-                }
+          _buildSectionHeader('Security'),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: SwitchListTile(
+              secondary: const Icon(Icons.fingerprint),
+              title: const Text('Require biometrics'),
+              subtitle: const Text('Ask for fingerprint before revealing passwords'),
+              value: _requireBiometricForReveal,
+              onChanged: (v) {
+                setState(() => _requireBiometricForReveal = v);
+                _save();
               },
             ),
           ),
-          ListTile(
-            title: const Text('Purge expired Recycle Bin items now'),
-            trailing: const Icon(Icons.delete_sweep_outlined),
-            onTap: () async {
-              final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: _retentionDays);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Purged $purged entries')));
-              }
-            },
+          
+          _buildSectionHeader('Data Management'),
+          Card(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.auto_delete_outlined),
+                  title: const Text('Recycle Bin retention'),
+                  subtitle: Text('Items deleted over $_retentionDays days ago are purged automatically'),
+                  trailing: DropdownMenu<int>(
+                    initialSelection: _retentionDays,
+                    onSelected: (v) async {
+                      if (v == null || v == _retentionDays) return;
+      
+                      if (v < _retentionDays) {
+                        final cutoff = DateTime.now().toUtc().subtract(Duration(days: v));
+                        final all = await VaultRepository.instance.getAllEntries(includeDeleted: true);
+                        final affectedEntries = all.where((e) => e.deleted && e.lastUpdated.isBefore(cutoff)).toList();
+      
+                        if (context.mounted) {
+                          late String dialogTitle;
+                          late String dialogContent;
+                          late String btnLabel;
+      
+                          if (affectedEntries.isNotEmpty) {
+                            final names = affectedEntries.map((e) => e.websiteName).take(5).join(', ');
+                            final more = affectedEntries.length > 5 ? ' and ${affectedEntries.length - 5} more' : '';
+                            dialogTitle = 'Warning: Immediate Deletion';
+                            dialogContent = 'Decreasing the retention to $v days will instantly and permanently erase ${affectedEntries.length} items currently in the Recycle Bin:\n\n$names$more\n\nAre you sure you want to proceed?';
+                            btnLabel = 'Apply and Delete';
+                          } else {
+                            dialogTitle = 'Confirm Retention Decrease';
+                            dialogContent = 'Are you sure you want to decrease the time deleted passwords are kept to $v days? Future and existing deleted items will be purged sooner.';
+                            btnLabel = 'Apply';
+                          }
+      
+                          final confirm = await showDialog<bool>(
+                            context: context,
+                            builder: (c) => AlertDialog(
+                              title: Text(dialogTitle),
+                              content: Text(dialogContent),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
+                                FilledButton(onPressed: () => Navigator.of(c).pop(true), child: Text(btnLabel)),
+                              ],
+                            ),
+                          );
+      
+                          if (confirm != true) return;
+                        }
+                      }
+      
+                      setState(() => _retentionDays = v);
+                      await _save();
+                      
+                      final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: v);
+                      if (purged > 0 && mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Automatically purged $purged overdue entries.')));
+                      }
+                    },
+                    dropdownMenuEntries: const [
+                      DropdownMenuEntry(value: 7, label: '7 days'),
+                      DropdownMenuEntry(value: 14, label: '14 days'),
+                      DropdownMenuEntry(value: 30, label: '30 days'),
+                      DropdownMenuEntry(value: 60, label: '60 days'),
+                      DropdownMenuEntry(value: 90, label: '90 days'),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.delete_sweep_outlined, color: Colors.red),
+                  title: const Text('Purge expired items now'),
+                  subtitle: const Text('Manually clean up Recycle Bin'),
+                  onTap: () async {
+                    final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: _retentionDays);
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Purged $purged entries')));
+                    }
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.upload_file_outlined),
+                  title: const Text('Import from CSV'),
+                  subtitle: const Text('Restore passwords exported from Chrome, Brave, or Firefox'),
+                  onTap: _handleImportCsv,
+                ),
+              ],
+            ),
           ),
-          ListTile(
-            title: const Text('Import from CSV'),
-            subtitle: const Text('Restore passwords exported from Chrome, Brave, or Firefox'),
-            trailing: const Icon(Icons.upload_file_outlined),
-            onTap: _handleImportCsv,
-          ),
+          const SizedBox(height: 24),
         ],
       ),
     );

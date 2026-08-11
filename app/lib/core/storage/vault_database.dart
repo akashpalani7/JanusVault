@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../vault/vault_session.dart';
+
 /// On-disk representation of a vault entry. Every sensitive field is
 /// already ciphertext (base64 EncryptedBlob) by the time it reaches this
 /// class — the JSON file on disk never sees plaintext.
@@ -140,12 +142,16 @@ class VaultSettingsRecord {
   bool requireBiometricForReveal;
   String selfDeviceId;
   DateTime vaultCreatedAt;
+  String? queuedRotationOldSyncAuthKeyBase64;
+  String? queuedRotationWrappedNewVekBase64;
 
   VaultSettingsRecord({
     required this.recycleBinRetentionDays,
     required this.requireBiometricForReveal,
     required this.selfDeviceId,
     required this.vaultCreatedAt,
+    this.queuedRotationOldSyncAuthKeyBase64,
+    this.queuedRotationWrappedNewVekBase64,
   });
 
   Map<String, dynamic> toJson() => {
@@ -153,6 +159,8 @@ class VaultSettingsRecord {
         'requireBiometricForReveal': requireBiometricForReveal,
         'selfDeviceId': selfDeviceId,
         'vaultCreatedAt': vaultCreatedAt.toIso8601String(),
+        'queuedRotationOldSyncAuthKeyBase64': queuedRotationOldSyncAuthKeyBase64,
+        'queuedRotationWrappedNewVekBase64': queuedRotationWrappedNewVekBase64,
       };
 
   static VaultSettingsRecord fromJson(Map<String, dynamic> json) => VaultSettingsRecord(
@@ -160,6 +168,8 @@ class VaultSettingsRecord {
         requireBiometricForReveal: json['requireBiometricForReveal'] as bool,
         selfDeviceId: json['selfDeviceId'] as String,
         vaultCreatedAt: DateTime.parse(json['vaultCreatedAt'] as String),
+        queuedRotationOldSyncAuthKeyBase64: json['queuedRotationOldSyncAuthKeyBase64'] as String?,
+        queuedRotationWrappedNewVekBase64: json['queuedRotationWrappedNewVekBase64'] as String?,
       );
 }
 
@@ -210,7 +220,7 @@ class VaultDatabase {
 
   Future<File> _file() async {
     final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}/peervault_db.json');
+    return File('${dir.path}/janusvault_db.json');
   }
 
   Future<void> load({bool force = false}) async {
@@ -378,4 +388,15 @@ class VaultDatabase {
     _settings = record;
     await _persist();
   }
+  
+  Future<void> wipeAll() async {
+    _entries.clear();
+    _devices.clear();
+    _kits.clear();
+    _settings = null;
+    VaultSession.instance.lock();
+    await _persist();
+    for (final l in _listeners) { l(); }
+  }
 }
+

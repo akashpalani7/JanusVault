@@ -1,6 +1,6 @@
 // Background entrypoint used by TWO native Android components:
-//   1. PeerVaultAutofillService.kt (autofill suggestions/save)
-//   2. PeerVaultSyncForegroundService.kt (the always-on "listen for LAN
+//   1. JanusVaultAutofillService.kt (autofill suggestions/save)
+//   2. JanusVaultSyncForegroundService.kt (the always-on "listen for LAN
 //      sync + phone-approval requests, even with the app fully closed"
 //      background service, toggled via the quick-settings tile or the
 //      Sync screen)
@@ -26,7 +26,7 @@ import 'core/sync/lan_sync_service.dart';
 import 'core/vault/vault_repository.dart';
 import 'core/vault/vault_session.dart';
 
-const MethodChannel _channel = MethodChannel('com.peervault.app/autofill');
+const MethodChannel _channel = MethodChannel('com.janusvault.app/autofill');
 
 void setupAutofillEntryPoint() {
   print('==== autofillMain STARTED ====');
@@ -152,7 +152,7 @@ String _packageToDomain(String pkg) {
   return pkg;
 }
 
-/// Called from PeerVaultAutofillAuthActivity.kt AFTER it has already run a
+/// Called from JanusVaultAutofillAuthActivity.kt AFTER it has already run a
 /// native androidx.biometric.BiometricPrompt check itself and the user
 /// passed it. This headless background isolate has no Activity, so it
 /// cannot render a biometric dialog (local_auth requires a FragmentActivity)
@@ -187,7 +187,7 @@ Future<bool> _saveCapturedCredential(Map<dynamic, dynamic> args) async {
   return true;
 }
 
-/// Resolved (approved/denied) from PeerVaultRemoteApprovalActivity.kt once
+/// Resolved (approved/denied) from JanusVaultRemoteApprovalActivity.kt once
 /// the user responds to the "Approve access from your browser?" notification
 /// this isolate posted via `showApprovalNotification`. Null while nothing
 /// is pending.
@@ -195,7 +195,7 @@ Completer<bool>? _pendingApprovalCompleter;
 
 /// Starts the LAN sync server so this device can respond to sync +
 /// phone-approval requests with the app fully closed — called from
-/// PeerVaultSyncForegroundService.kt, which is what keeps this isolate
+/// JanusVaultSyncForegroundService.kt, which is what keeps this isolate
 /// alive in the background (a plain background isolate with no foreground
 /// service would get killed by Android fairly quickly).
 ///
@@ -230,7 +230,7 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
 
   // This headless isolate has no Activity, so it can't show a Material
   // dialog the way main.dart's foreground handler does. Instead: post a
-  // native notification and wait for PeerVaultRemoteApprovalActivity.kt
+  // native notification and wait for JanusVaultRemoteApprovalActivity.kt
   // (launched from that notification, which DOES have an Activity, so it
   // CAN run BiometricPrompt) to call back via `resolveApproval`.
   LanSyncService.instance.onAuthPromptRequested = (actionLabel) async {

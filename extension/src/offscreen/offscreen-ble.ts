@@ -2,7 +2,7 @@
 import { runSyncProtocol, SyncTransport } from '../lib/sync-client.js';
 import { deriveEcdhSharedSecret, exportJwEcdhKey, generateEcdhKeyPair, computeEcdhPin, hmacSha256 } from '../lib/crypto.js';
 import { ExtensionStorage } from '../lib/storage.js';
-const PEERVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+const JANUSVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 const SYNC_CHARACTERISTIC_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567891';
 const EOM_MARKER = '\x04';
 const MAX_CHUNK_SIZE = 480;
@@ -135,55 +135,80 @@ async function connectToDevice(paired: BluetoothDevice): Promise<{
     device: BluetoothDevice;
     char: BluetoothRemoteGATTCharacteristic;
 }> {
+    const isMacOS = navigator.userAgent.includes("Mac OS X");
+
     if (!paired.gatt!.connected) {
         console.log(`[Ext/BLE] Device ${paired.id} not connected, handling potential MAC roll...`);
-        const abortController = new AbortController();
 
-        try {
-            const adPromise = new Promise((resolve) => {
-                paired.addEventListener('advertisementreceived', (event) => {
-                    console.log("[Ext/BLE] Sighted advertisement! Internal MAC cache updated.");
-                    resolve(true);
-                }, { once: true, signal: abortController.signal });
-            });
-
+        // On macOS, watchAdvertisements() is not supported by the Chromium
+        // WebBluetooth implementation. Attempting it causes a guaranteed
+        // 3-second timeout delay before every reconnect, which degrades UX
+        // significantly and can make users think they need to re-pair.
+        //
+        // The fix: on macOS, skip advertisement watching entirely and go
+        // straight to gatt.connect() with retries. The Chromium macOS BLE
+        // stack handles address resolution internally during connect(),
+        // so watchAdvertisements() was never actually needed there — it was
+        // only helpful on Windows where the OS-level BLE cache can go stale
+        // after a peripheral's MAC address rotates.
+        if (!isMacOS) {
+            const abortController = new AbortController();
             try {
-                // @ts-ignore
-                await paired.watchAdvertisements({ signal: abortController.signal });
-            } catch(e) {
-                console.warn("[Ext/BLE] macOS watchAdvertisements missing/failed:", e);
-            }
+                const adPromise = new Promise((resolve) => {
+                    paired.addEventListener('advertisementreceived', (event) => {
+                        console.log("[Ext/BLE] Sighted advertisement! Internal MAC cache updated.");
+                        resolve(true);
+                    }, { once: true, signal: abortController.signal });
+                });
 
-            await Promise.race([
-                adPromise,
-                new Promise((_, reject) => setTimeout(() => reject(new Error("Ad timeout")), 3000))
-            ]);
-        } catch (e) {
-            console.warn("[Ext/BLE] initial ad check timed out or failed:", e);
-        } finally {
-            abortController.abort(); // clean up the scanner
+                try {
+                    // @ts-ignore
+                    await paired.watchAdvertisements({ signal: abortController.signal });
+                } catch(e) {
+                    console.warn("[Ext/BLE] watchAdvertisements failed (non-macOS):", e);
+                }
+
+                await Promise.race([
+                    adPromise,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Ad timeout")), 2000))
+                ]);
+            } catch (e) {
+                // Timed out or failed — fall through to direct connect
+                console.warn("[Ext/BLE] Ad check timed out, proceeding to direct connect:", e);
+            } finally {
+                abortController.abort();
+            }
+        } else {
+            console.log("[Ext/BLE] macOS detected — skipping watchAdvertisements(), connecting directly.");
         }
     }
 
+    // Connect with retries. On macOS, the first attempt often succeeds
+    // immediately since the OS handles BLE address resolution during
+    // connect(). On Windows, if watchAdvertisements() timed out above,
+    // the retries give the OS BLE cache time to refresh.
     let server: BluetoothRemoteGATTServer;
-    for (let i = 0; i < 4; i++) {
+    const maxRetries = isMacOS ? 5 : 4;
+    const retryDelay = isMacOS ? 800 : 1000;
+    for (let i = 0; i < maxRetries; i++) {
         try {
             server = await paired.gatt!.connect();
             break;
         } catch (e) {
-            if (i === 3) throw e;
-            await new Promise(r => setTimeout(r, 1000));
+            if (i === maxRetries - 1) throw e;
+            console.warn(`[Ext/BLE] GATT connect attempt ${i + 1}/${maxRetries} failed, retrying in ${retryDelay}ms...`);
+            await new Promise(r => setTimeout(r, retryDelay));
         }
     }
 
     let service;
     try {
-        service = await server!.getPrimaryService(PEERVAULT_SERVICE_UUID);
+        service = await server!.getPrimaryService(JANUSVAULT_SERVICE_UUID);
     } catch (e: any) {
         if (e.message?.includes('reconnect') || e.message?.includes('connect first') || e.message?.includes('disconnected')) {
             console.log("[Ext/BLE] Chrome GATT state desynced! Forcing hard reconnect...");
             await paired.gatt!.connect();
-            service = await paired.gatt!.getPrimaryService(PEERVAULT_SERVICE_UUID);
+            service = await paired.gatt!.getPrimaryService(JANUSVAULT_SERVICE_UUID);
         } else {
             throw e;
         }
@@ -198,7 +223,7 @@ async function connectToAuthorizedDevice(): Promise<{
     char: BluetoothRemoteGATTCharacteristic;
 }> {
     const devices = await navigator.bluetooth.getDevices();
-    if (devices.length === 0) throw new Error('No previously paired PeerVault device found.');
+    if (devices.length === 0) throw new Error('No previously paired JanusVault device found.');
     let lastErr;
     for (const dev of devices) {
         try {
@@ -212,7 +237,7 @@ async function connectToAuthorizedDevice(): Promise<{
 
 async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{ ok: boolean, pulled: number, pushed: number }> {
     const devices = await navigator.bluetooth.getDevices();
-    if (devices.length === 0) throw new Error('No previously paired PeerVault device found.');
+    if (devices.length === 0) throw new Error('No previously paired JanusVault device found.');
 
     let totalPulled = 0;
     let totalPushed = 0;

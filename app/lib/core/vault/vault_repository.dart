@@ -1,3 +1,4 @@
+import 'package:cryptography/cryptography.dart';
 import 'package:uuid/uuid.dart';
 
 import '../crypto/crypto_engine.dart';
@@ -117,6 +118,17 @@ class VaultRepository {
 
   Future<void> hardDeleteEntry(String uuid) async {
     await _db.deleteEntriesWhere((r) => r.uuid == uuid);
+  }
+
+  /// Called during VEK rotation. Decrypts everything with the CURRENT VEK,
+  /// installs the NEW VEK in the session, and re-persists everything. This
+  /// does NOT change the lastUpdated timestamp, preventing infinite sync loops.
+  Future<void> reencryptAllWithNewVek(SecretKey newVek) async {
+    final all = await getAllEntries(includeDeleted: true);
+    VaultSession.instance.installVekDirectly(newVek);
+    for (final entry in all) {
+      await _persist(entry);
+    }
   }
 
   // ---------------------------------------------------------------------

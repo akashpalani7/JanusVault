@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -16,9 +16,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * Keeps PeerVault listening for LAN sync + BLE GATT + phone-approval
+ * Keeps JanusVault listening for LAN sync + BLE GATT + phone-approval
  * requests even when the app is fully closed — toggled from
- * PeerVaultQuickTileService or the in-app Sync screen.
+ * JanusVaultQuickTileService or the in-app Sync screen.
  *
  * Bluetooth handling:
  *   - If Bluetooth is OFF when the service starts, it is automatically
@@ -32,13 +32,13 @@ import kotlinx.coroutines.launch
  * a foreground service with a persistent (but low-priority, silent)
  * notification is the standard, battery-reasonable way to stay alive.
  */
-class PeerVaultSyncForegroundService : Service() {
+class JanusVaultSyncForegroundService : Service() {
     companion object {
-        private const val CHANNEL_ID = "peervault_listening"
+        private const val CHANNEL_ID = "janusvault_listening"
         private const val NOTIFICATION_ID = 4243
-        const val ACTION_STOP = "com.example.peervault.app.ACTION_STOP_LISTENING"
+        const val ACTION_STOP = "com.example.janusvault.app.ACTION_STOP_LISTENING"
 
-        private const val PREFS = "peervault_tile_prefs"
+        private const val PREFS = "janusvault_tile_prefs"
         private const val KEY_BT_WAS_OFF = "bt_turned_on_by_us"
     }
 
@@ -64,7 +64,7 @@ class PeerVaultSyncForegroundService : Service() {
                 kotlinx.coroutines.delay(120_000L)
                 stopSelf()
             } catch (e: Exception) {
-                android.util.Log.e("PeerVault", "Sync service start failed: ${e.message}", e)
+                android.util.Log.e("JanusVault", "Sync service start failed: ${e.message}", e)
                 // Couldn't start (e.g. vault not set up on this device yet) —
                 // stop ourselves rather than sit in the foreground doing nothing.
                 stopSelf()
@@ -83,7 +83,7 @@ class PeerVaultSyncForegroundService : Service() {
         scope.launch { AutofillBridge.stopSyncListening(applicationContext) }
         // Restore Bluetooth state if we were the ones who turned it on
         restoreBluetoothState()
-        PeerVaultQuickTileService.setListening(applicationContext, false)
+        JanusVaultQuickTileService.setListening(applicationContext, false)
         super.onDestroy()
     }
 
@@ -114,15 +114,15 @@ class PeerVaultSyncForegroundService : Service() {
                 val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 prefs.edit().putBoolean(KEY_BT_WAS_OFF, true).apply()
                 adapter.enable()
-                android.util.Log.i("PeerVault", "Bluetooth turned ON by PeerVault (will be turned off when listening stops)")
+                android.util.Log.i("JanusVault", "Bluetooth turned ON by JanusVault (will be turned off when listening stops)")
             } else {
                 // Bluetooth was already on — don't touch it on shutdown
                 val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 prefs.edit().putBoolean(KEY_BT_WAS_OFF, false).apply()
-                android.util.Log.i("PeerVault", "Bluetooth already ON — will not turn off on shutdown")
+                android.util.Log.i("JanusVault", "Bluetooth already ON — will not turn off on shutdown")
             }
         } catch (e: SecurityException) {
-            android.util.Log.w("PeerVault", "No BLUETOOTH_CONNECT permission — skipping BLE: ${e.message}")
+            android.util.Log.w("JanusVault", "No BLUETOOTH_CONNECT permission — skipping BLE: ${e.message}")
         }
     }
 
@@ -142,11 +142,11 @@ class PeerVaultSyncForegroundService : Service() {
                 val adapter = btManager.adapter ?: return
                 if (adapter.isEnabled) {
                     adapter.disable()
-                    android.util.Log.i("PeerVault", "Bluetooth turned OFF by PeerVault (was turned on by us)")
+                    android.util.Log.i("JanusVault", "Bluetooth turned OFF by JanusVault (was turned on by us)")
                 }
             }
         } catch (e: SecurityException) {
-            android.util.Log.w("PeerVault", "Could not restore BT state: ${e.message}")
+            android.util.Log.w("JanusVault", "Could not restore BT state: ${e.message}")
         }
     }
 
@@ -159,7 +159,7 @@ class PeerVaultSyncForegroundService : Service() {
     private fun buildNotification(text: String = "Ready for sync and approval requests from your paired devices.") =
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("PeerVault Listener")
+            .setContentTitle("JanusVault Listener")
             .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -174,8 +174,8 @@ class PeerVaultSyncForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-        val channel = NotificationChannel(CHANNEL_ID, "PeerVault Listener", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Shown while PeerVault is listening for sync/approval requests in the background."
+        val channel = NotificationChannel(CHANNEL_ID, "JanusVault Listener", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Shown while JanusVault is listening for sync/approval requests in the background."
         }
         manager.createNotificationChannel(channel)
     }

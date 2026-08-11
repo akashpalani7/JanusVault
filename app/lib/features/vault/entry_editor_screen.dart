@@ -15,6 +15,7 @@ class EntryEditorScreen extends ConsumerStatefulWidget {
 }
 
 class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _websiteNameCtrl;
   late final TextEditingController _websiteUrlCtrl;
   late final TextEditingController _usernameCtrl;
@@ -59,19 +60,12 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
     setState(() => _passwordCtrl.text = generated);
   }
 
-  /// Reveal is free to hide (going obscured is never a security risk), but
-  /// going from obscured -> visible requires a biometric check first if
-  /// the vault's `requireBiometricForReveal` setting is on — this is the
-  /// setting that used to be stored and shown in Settings but never
-  /// actually enforced anywhere.
   Future<void> _toggleObscured() async {
     if (!_obscurePassword) {
       setState(() => _obscurePassword = true);
       return;
     }
     if (widget.existing == null) {
-      // Nothing secret to "reveal" yet — this is a password the user just
-      // typed or generated in this same session.
       setState(() => _obscurePassword = false);
       return;
     }
@@ -91,6 +85,8 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
   }
 
   Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    
     setState(() => _saving = true);
     try {
       final repo = ref.read(vaultRepositoryProvider);
@@ -116,102 +112,197 @@ class _EntryEditorScreenState extends ConsumerState<EntryEditorScreen> {
     }
   }
 
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String labelText,
+    required IconData prefixIcon,
+    TextInputType? keyboardType,
+    bool obscureText = false,
+    Widget? suffixIcon,
+    String? Function(String?)? validator,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        validator: validator,
+        decoration: InputDecoration(
+          labelText: labelText,
+          prefixIcon: Icon(prefixIcon),
+          suffixIcon: suffixIcon,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          filled: true,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.existing == null ? 'Add password' : 'Edit password')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          TextField(controller: _websiteNameCtrl, decoration: const InputDecoration(labelText: 'Website name')),
-          const SizedBox(height: 12),
-          TextField(controller: _websiteUrlCtrl, decoration: const InputDecoration(labelText: 'Website URL')),
-          const SizedBox(height: 12),
-          TextField(controller: _usernameCtrl, decoration: const InputDecoration(labelText: 'Username / email')),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _passwordCtrl,
-            obscureText: _obscurePassword,
-            decoration: InputDecoration(
-              labelText: 'Password',
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
+      appBar: AppBar(title: Text(widget.existing == null ? 'Add login' : 'Edit login')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Website Info', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 16),
+                    _buildTextField(
+                      controller: _websiteNameCtrl,
+                      labelText: 'Website name (e.g. Google)',
+                      prefixIcon: Icons.language,
+                      validator: (val) => val == null || val.trim().isEmpty ? 'Required' : null,
+                    ),
+                    _buildTextField(
+                      controller: _websiteUrlCtrl,
+                      labelText: 'Website URL (e.g. https://google.com)',
+                      prefixIcon: Icons.link,
+                      keyboardType: TextInputType.url,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Credentials', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 16),
+                    _buildTextField(
+                      controller: _usernameCtrl,
+                      labelText: 'Username / email',
+                      prefixIcon: Icons.person_outline,
+                      keyboardType: TextInputType.emailAddress,
+                    ),
+                    _buildTextField(
+                      controller: _passwordCtrl,
+                      labelText: 'Password',
+                      prefixIcon: Icons.password,
+                      obscureText: _obscurePassword,
+                      suffixIcon: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                            onPressed: _toggleObscured,
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.autorenew),
+                            tooltip: 'Generate new',
+                            onPressed: () {
+                              _generatePassword();
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Password generated'), duration: Duration(seconds: 1)));
+                            },
+                          ),
+                        ],
+                      ),
+                      validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Card(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              clipBehavior: Clip.antiAlias,
+              child: ExpansionTile(
+                title: const Text('Password Generator Options', style: TextStyle(fontWeight: FontWeight.bold)),
+                leading: const Icon(Icons.settings_suggest),
+                childrenPadding: const EdgeInsets.all(16),
                 children: [
-                  IconButton(
-                    icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
-                    onPressed: _toggleObscured,
+                  Row(
+                    children: [
+                      Text('Length: ${_passwordLength.toInt()}', style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Expanded(
+                        child: Slider(
+                          value: _passwordLength,
+                          min: 4,
+                          max: 64,
+                          divisions: 60,
+                          label: _passwordLength.toInt().toString(),
+                          onChanged: (val) {
+                            setState(() => _passwordLength = val);
+                            _generatePassword();
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-                  IconButton(icon: const Icon(Icons.autorenew), onPressed: _generatePassword),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilterChip(
+                        label: const Text('A-Z'),
+                        selected: _useUpper,
+                        onSelected: (val) {
+                          if (!val && !_useLower && !_useDigits && !_useSymbols) return;
+                          setState(() => _useUpper = val);
+                          _generatePassword();
+                        },
+                      ),
+                      FilterChip(
+                        label: const Text('a-z'),
+                        selected: _useLower,
+                        onSelected: (val) {
+                          if (!val && !_useUpper && !_useDigits && !_useSymbols) return;
+                          setState(() => _useLower = val);
+                          _generatePassword();
+                        },
+                      ),
+                      FilterChip(
+                        label: const Text('0-9'),
+                        selected: _useDigits,
+                        onSelected: (val) {
+                          if (!val && !_useUpper && !_useLower && !_useSymbols) return;
+                          setState(() => _useDigits = val);
+                          _generatePassword();
+                        },
+                      ),
+                      FilterChip(
+                        label: const Text('!@#'),
+                        selected: _useSymbols,
+                        onSelected: (val) {
+                          if (!val && !_useUpper && !_useLower && !_useDigits) return;
+                          setState(() => _useSymbols = val);
+                          _generatePassword();
+                        },
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Text('Length: ${_passwordLength.toInt()}', style: const TextStyle(fontWeight: FontWeight.w600)),
-              Expanded(
-                child: Slider(
-                  value: _passwordLength,
-                  min: 4,
-                  max: 64,
-                  divisions: 60,
-                  label: _passwordLength.toInt().toString(),
-                  onChanged: (val) {
-                    setState(() => _passwordLength = val);
-                    _generatePassword();
-                  },
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: FilledButton(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(56),
                 ),
+                child: _saving 
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
+                    : const Text('Save Entry', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
-            ],
-          ),
-          Wrap(
-            spacing: 8,
-            children: [
-              FilterChip(
-                label: const Text('A-Z'),
-                selected: _useUpper,
-                onSelected: (val) {
-                  if (!val && !_useLower && !_useDigits && !_useSymbols) return;
-                  setState(() => _useUpper = val);
-                  _generatePassword();
-                },
-              ),
-              FilterChip(
-                label: const Text('a-z'),
-                selected: _useLower,
-                onSelected: (val) {
-                  if (!val && !_useUpper && !_useDigits && !_useSymbols) return;
-                  setState(() => _useLower = val);
-                  _generatePassword();
-                },
-              ),
-              FilterChip(
-                label: const Text('0-9'),
-                selected: _useDigits,
-                onSelected: (val) {
-                  if (!val && !_useUpper && !_useLower && !_useSymbols) return;
-                  setState(() => _useDigits = val);
-                  _generatePassword();
-                },
-              ),
-              FilterChip(
-                label: const Text('!@#'),
-                selected: _useSymbols,
-                onSelected: (val) {
-                  if (!val && !_useUpper && !_useLower && !_useDigits) return;
-                  setState(() => _useSymbols = val);
-                  _generatePassword();
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: _saving ? null : _save,
-            child: _saving ? const CircularProgressIndicator() : const Text('Save'),
-          ),
-        ],
+            ),
+            const SizedBox(height: 48),
+          ],
+        ),
       ),
     );
   }

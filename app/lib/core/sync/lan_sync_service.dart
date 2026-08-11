@@ -10,11 +10,13 @@ import 'package:network_info_plus/network_info_plus.dart';
 
 import '../crypto/crypto_engine.dart';
 import '../devices/device_manager.dart';
+import '../storage/secure_key_store.dart';
 import '../storage/vault_database.dart';
+import '../vault/vault_repository.dart';
 import '../vault/vault_session.dart';
 import 'sync_protocol.dart';
 
-const String kServiceType = '_peervault._tcp';
+const String kServiceType = '_janusvault._tcp';
 
 /// Per-connection handshake state. Anyone can open the raw socket — that's
 /// unavoidable on a shared LAN — but nothing beyond `hello`/`helloResponse`
@@ -63,12 +65,37 @@ class _SyncConnection {
     final authKey = await CryptoEngine.instance.deriveSyncAuthKey(vek);
     final expectedMac = await CryptoEngine.instance.hmacSha256(authKey, sentNonce);
     final actualMac = base64Decode(macBase64);
-    final valid = expectedMac.length == actualMac.length &&
+    var valid = expectedMac.length == actualMac.length &&
         _constantTimeEquals(expectedMac, actualMac);
+        
+    final db = VaultDatabase.instance;
+    if (!valid && db.settings?.queuedRotationOldSyncAuthKeyBase64 != null) {
+      final oldKeyBytes = base64Decode(db.settings!.queuedRotationOldSyncAuthKeyBase64!);
+      final oldAuthKey = SecretKey(oldKeyBytes);
+      final expectedMacOld = await CryptoEngine.instance.hmacSha256(oldAuthKey, sentNonce);
+      if (expectedMacOld.length == actualMac.length && _constantTimeEquals(expectedMacOld, actualMac)) {
+        valid = true;
+        socket.add(SyncMessage(SyncMsgType.vekRotation, {
+          'wrappedNewVek': db.settings!.queuedRotationWrappedNewVekBase64,
+          'rotationTimestamp': DateTime.now().toUtc().toIso8601String(),
+          'rotatedByDeviceId': db.settings!.selfDeviceId,
+        }).encode());
+      }
+    }
+    
     print('SyncConnection: Authentication result -> validity = $valid');
     authenticated = valid;
-    if (!_authCompleter.isCompleted) _authCompleter.complete(valid);
-    if (!valid) _fail();
+    
+    if (valid) {
+      if (!_authCompleter.isCompleted) _authCompleter.complete(true);
+    } else {
+      Timer(const Duration(seconds: 2), () {
+        if (!authenticated && socket.readyState == WebSocket.open) {
+          if (!_authCompleter.isCompleted) _authCompleter.complete(false);
+          _fail();
+        }
+      });
+    }
   }
 
   void _fail() {
@@ -164,7 +191,7 @@ class LanSyncService {
       } else {
         request.response
           ..statusCode = HttpStatus.upgradeRequired
-          ..write('PeerVault sync endpoint — WebSocket upgrade required')
+          ..write('JanusVault sync endpoint — WebSocket upgrade required')
           ..close();
       }
     });
@@ -196,7 +223,7 @@ class LanSyncService {
     if (!VaultSession.instance.isUnlocked) {
       print('LanSyncService: Vault is locked, rejecting peer connection');
       socket.add(SyncMessage(SyncMsgType.error, {
-        'message': 'This device\'s vault is locked. Open PeerVault and unlock it, then try again.',
+        'message': 'This device\'s vault is locked. Open JanusVault and unlock it, then try again.',
       }).encode());
       socket.close();
       return;
@@ -257,6 +284,32 @@ class LanSyncService {
       await _handlePairingRequest(conn, message);
       return;
     }
+
+    if (message.type == SyncMsgType.vekRotation) {
+      final wrappedNewVekBase64 = message.payload['wrappedNewVek'] as String?;
+      if (wrappedNewVekBase64 == null) return;
+      final vekToUse = VaultSession.instance.vek;
+      
+      final currentAuthKey = await CryptoEngine.instance.deriveSyncAuthKey(vekToUse);
+      final blob = EncryptedBlob.fromBase64(wrappedNewVekBase64);
+      try {
+        final newVek = await CryptoEngine.instance.unwrapKey(wrapped: blob, wrappingKey: currentAuthKey);
+        await VaultRepository.instance.reencryptAllWithNewVek(newVek);
+        final deviceLocalKey = await SecureKeyStore.instance.loadDeviceLocalKey();
+        final record = _db.findDeviceById(_db.settings!.selfDeviceId);
+        final wrappedForStorage = await CryptoEngine.instance.wrapKey(keyToWrap: newVek, wrappingKey: deviceLocalKey!);
+        record!.wrappedVekBase64 = wrappedForStorage.toBase64();
+        await _db.upsertDevice(record);
+        
+        socket.add(SyncMessage(SyncMsgType.vekRotationAck, {}).encode());
+        conn.authenticated = true;
+        if (!conn._authCompleter.isCompleted) conn._authCompleter.complete(true);
+      } catch (e) {
+        socket.add(SyncMessage(SyncMsgType.error, {'message': 'Key rotation failed: $e'}).encode());
+      }
+      return;
+    }
+
     if (!conn.authenticated) return;
 
     switch (message.type) {
@@ -306,6 +359,23 @@ class LanSyncService {
         final infos = (message.payload['devices'] as List)
             .map((e) => DeviceInfo.fromJson(e as Map<String, dynamic>))
             .toList();
+            
+        final peerId = infos.firstOrNull?.deviceId;
+        final existingPeer = peerId != null ? _db.findDeviceById(peerId) : null;
+        if (existingPeer != null && existingPeer.revoked) {
+          socket.add(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
+          await _closeQuietly(socket);
+          return;
+        }
+        
+        final selfInfo = infos.where((d) => d.deviceId == _db.settings?.selfDeviceId).firstOrNull;
+        if (selfInfo != null && selfInfo.revoked) {
+          await _db.wipeAll();
+          socket.add(SyncMessage(SyncMsgType.error, {'message': 'This device has been revoked and wiped itself.'}).encode());
+          await _closeQuietly(socket);
+          return;
+        }
+            
         await DeviceManager.instance.mergeIncomingDeviceInfos(infos);
         break;
 
@@ -336,6 +406,8 @@ class LanSyncService {
       case SyncMsgType.pairingSuccess:
       case SyncMsgType.error:
       case SyncMsgType.authResponse:
+      case SyncMsgType.vekRotation:
+      case SyncMsgType.vekRotationAck:
         break;
     }
   }
@@ -430,7 +502,7 @@ class LanSyncService {
     print('LanSyncService (Client mode): Handshake resulted in $authenticated');
     if (!authenticated) {
       await socket.close();
-      throw Exception('Could not verify this device is a trusted PeerVault peer — refusing to sync.');
+      throw Exception('Could not verify this device is a trusted JanusVault peer — refusing to sync.');
     }
 
     _sendDeviceInfo(conn);
@@ -446,6 +518,20 @@ class LanSyncService {
       // "Last synced" on the Trusted devices screen from going stale.
       await DeviceManager.instance.touchSelfLastSynced();
     }
+  }
+
+  Future<Map<String, String>> syncWithAllDiscoveredPeers({Duration timeout = const Duration(seconds: 4)}) async {
+    final peers = await discoverPeers(timeout: timeout);
+    final results = <String, String>{};
+    for (final peer in peers) {
+      try {
+        await syncWithPeer(peer);
+        results[peer.name] = 'Success';
+      } catch (e) {
+        results[peer.name] = 'Failed: $e';
+      }
+    }
+    return results;
   }
 
   // ---------------------------------------------------------------------

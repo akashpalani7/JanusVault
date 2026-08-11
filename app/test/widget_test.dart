@@ -8,10 +8,10 @@ void main() {
     // This just verifies the test harness itself compiles and runs.
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(body: Center(child: Text('PeerVault smoke test'))),
+        home: Scaffold(body: Center(child: Text('JanusVault smoke test'))),
       ),
     );
 
-    expect(find.text('PeerVault smoke test'), findsOneWidget);
+    expect(find.text('JanusVault smoke test'), findsOneWidget);
   });
 }

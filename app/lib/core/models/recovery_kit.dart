@@ -37,14 +37,14 @@ class RecoveryKitPackage {
 
   const RecoveryKitPackage({required this.kitId, required this.saltBase64, required this.wrappedVekBase64});
 
-  /// "peervault-recovery:v1:<kitId>:<salt>:<wrappedVek>" — same style as
+  /// "janusvault-recovery:v1:<kitId>:<salt>:<wrappedVek>" — same style as
   /// PairingPackage.encode(), suitable for a QR code or manual export.
-  String encode() => 'peervault-recovery:v1:$kitId:$saltBase64:$wrappedVekBase64';
+  String encode() => 'janusvault-recovery:v1:$kitId:$saltBase64:$wrappedVekBase64';
 
   static RecoveryKitPackage decode(String raw) {
     final parts = raw.trim().split(':');
-    if (parts.length != 5 || parts[0] != 'peervault-recovery' || parts[1] != 'v1') {
-      throw const FormatException('Not a valid PeerVault Recovery Kit package');
+    if (parts.length != 5 || parts[0] != 'janusvault-recovery' || parts[1] != 'v1') {
+      throw const FormatException('Not a valid JanusVault Recovery Kit package');
     }
     return RecoveryKitPackage(kitId: parts[2], saltBase64: parts[3], wrappedVekBase64: parts[4]);
   }

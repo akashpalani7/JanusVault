@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.peervault"
+    namespace = "com.example.janusvault"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,9 +21,9 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.peervault"
+        applicationId = "com.example.janusvault"
         // Android's Autofill Framework (android.service.autofill.*, used by
-        // PeerVaultAutofillService) requires API 26 (Android 8.0) at
+        // JanusVaultAutofillService) requires API 26 (Android 8.0) at
         // minimum — this is a hard floor, not a preference, so it's set
         // explicitly rather than deferring to whatever Flutter's own
         // default happens to be.
@@ -43,8 +43,8 @@ android {
 }
 
 dependencies {
-    // Required by PeerVaultAutofillAuthActivity.kt (BiometricPrompt,
-    // FragmentActivity) and AutofillBridge.kt / PeerVaultAutofillService.kt
+    // Required by JanusVaultAutofillAuthActivity.kt (BiometricPrompt,
+    // FragmentActivity) and AutofillBridge.kt / JanusVaultAutofillService.kt
     // (kotlinx.coroutines). These were imported by the Kotlin autofill code
     // without ever being declared here, which means the native Android
     // side could not have compiled at all — this is very likely the actual

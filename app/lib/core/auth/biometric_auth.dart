@@ -21,12 +21,14 @@ class BiometricAuthService {
     return canCheck || isSupported;
   }
 
-  Future<BiometricAuthResult> authenticate({String reason = 'Unlock your PeerVault'}) async {
+  Future<BiometricAuthResult> authenticate(
+      {String reason = 'Unlock your JanusVault'}) async {
     try {
       final didAuthenticate = await _localAuth.authenticate(
         localizedReason: reason,
         options: const AuthenticationOptions(
-          biometricOnly: false, // allow PIN/pattern/passcode fallback (device credential)
+          biometricOnly:
+              false, // allow PIN/pattern/passcode fallback (device credential)
           stickyAuth: true,
           useErrorDialogs: true,
         ),

@@ -122,7 +122,7 @@ class DeviceInfo {
       );
 }
 
-enum SyncMsgType { hello, helloResponse, deviceInfo, metadata, request, records, done, error, authRequest, authResponse, pairingRequest, pairingChallenge, pairingSuccess }
+enum SyncMsgType { hello, helloResponse, deviceInfo, metadata, request, records, done, error, authRequest, authResponse, pairingRequest, pairingChallenge, pairingSuccess, vekRotation, vekRotationAck }
 
 class SyncMessage {
   final SyncMsgType type;

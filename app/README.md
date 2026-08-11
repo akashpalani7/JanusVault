@@ -1,4 +1,4 @@
-# peervault
+# janusvault
 
 A new Flutter project.
 

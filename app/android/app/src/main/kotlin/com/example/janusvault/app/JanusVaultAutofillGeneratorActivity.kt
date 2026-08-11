@@ -1,4 +1,4 @@
-package com.example.peervault.app
+package com.example.janusvault.app
 
 import android.content.Intent
 import android.os.Bundle
@@ -25,17 +25,17 @@ import kotlinx.coroutines.launch
  *
  * Uses a native AlertDialog-style layout (no Flutter engine startup cost).
  */
-class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
+class JanusVaultAutofillGeneratorActivity : FragmentActivity() {
 
     private val scope = MainScope()
 
     companion object {
-        const val EXTRA_QUERY = "peervault.gen.query"
-        const val EXTRA_USERNAME = "peervault.gen.username"
-        const val EXTRA_PASSWORD = "peervault.gen.password"
-        const val EXTRA_USERNAME_ID = "peervault.gen.username_id"
-        const val EXTRA_PASSWORD_ID = "peervault.gen.password_id"
-        const val EXTRA_FOCUSED_ID = "peervault.gen.focused_id"
+        const val EXTRA_QUERY = "janusvault.gen.query"
+        const val EXTRA_USERNAME = "janusvault.gen.username"
+        const val EXTRA_PASSWORD = "janusvault.gen.password"
+        const val EXTRA_USERNAME_ID = "janusvault.gen.username_id"
+        const val EXTRA_PASSWORD_ID = "janusvault.gen.password_id"
+        const val EXTRA_FOCUSED_ID = "janusvault.gen.focused_id"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,7 +67,7 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
 
         // Branding
         val topBranding = TextView(this).apply {
-            text = "🛡️ PeerVault"
+            text = "🛡️ JanusVault"
             textSize = 14f
             setTextColor(0xFF8888AA.toInt())
             gravity = Gravity.CENTER
@@ -311,10 +311,10 @@ class PeerVaultAutofillGeneratorActivity : FragmentActivity() {
                     val resultIntent = Intent()
                     resultIntent.putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, dataset)
                     setResult(RESULT_OK, resultIntent)
-                    android.util.Log.d("PeerVault", "Generator: saved & returning password for '$query'")
+                    android.util.Log.d("JanusVault", "Generator: saved & returning password for '$query'")
                     finish()
                 } catch (e: Exception) {
-                    android.util.Log.e("PeerVault", "Generator error: ${e.message}", e)
+                    android.util.Log.e("JanusVault", "Generator error: ${e.message}", e)
                     Toast.makeText(applicationContext, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
                     saveBtn.isEnabled = true
                     saveBtn.text = "✅ Save & Fill"
