@@ -44,12 +44,15 @@ Widget _buildStatusChip(String? status) {
 }
 
 class SyncScreen extends ConsumerWidget {
-  const SyncScreen({super.key});
+  final TabController? controller;
+  
+  const SyncScreen({super.key, this.controller});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const TabBarView(
-      children: [
+    return TabBarView(
+      controller: controller,
+      children: const [
         _LanSyncTab(),
         _BleGattTab(),
         _NearbySyncTab(),
@@ -181,7 +184,7 @@ class _LanSyncTabState extends ConsumerState<_LanSyncTab> with AutomaticKeepAliv
                   child: Icon(Icons.wifi_tethering, color: Theme.of(context).colorScheme.onPrimaryContainer),
                 ),
                 title: const Text('Make discoverable on WiFi', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(_selfAddress == null ? 'Connect to WiFi or hotspot first' : 'IP Address: $_selfAddress:${ref.read(lanSyncServiceProvider).boundPort}'),
+                subtitle: Text(_selfAddress == null ? 'Connect to WiFi or hotspot first' : '1. Enter janusvault.local:${ref.read(lanSyncServiceProvider).boundPort} on PC\n2. Backup IP: $_selfAddress:${ref.read(lanSyncServiceProvider).boundPort}'),
                 value: _hosting,
                 onChanged: _toggleHosting,
               ),

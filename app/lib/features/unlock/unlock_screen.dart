@@ -160,7 +160,7 @@ class _UnlockScreenState extends ConsumerState<UnlockScreen> with SingleTickerPr
                       ),
                       const SizedBox(height: 16),
                       TextButton(
-                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
+                        onPressed: () => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const RecoveryScreen())),
                         child: const Text('Lost your device? Use Recovery Kit'),
                       ),
                     ],

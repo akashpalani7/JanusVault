@@ -2,6 +2,7 @@
 
     <!-- Biometric unlock -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
     <!-- LAN sync (mDNS advertise/discover + WebSocket) -->
     <uses-permission android:name="android.permission.INTERNET" />

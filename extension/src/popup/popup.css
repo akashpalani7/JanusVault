@@ -85,6 +85,12 @@ textarea {
   resize: vertical;
 }
 
+#newPasswordInput {
+  font-family: 'JetBrains Mono', monospace, system-ui;
+  letter-spacing: 1px;
+  user-select: all;
+}
+
 ul#resultsList, ul#recycleBinList, ul#devicesList {
   list-style: none;
   margin: 0;
@@ -522,4 +528,18 @@ select:focus {
   border-radius: 12px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
   border: 1px solid var(--border-color);
+}
+
+.loader-circle {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--text-main);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }

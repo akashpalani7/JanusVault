@@ -157,7 +157,9 @@ class SyncConnectionHandler {
 
         if (diff.uuidsToSendToPeer.isNotEmpty) {
           final records = _wireRecordsFor(diff.uuidsToSendToPeer);
-          transport.send(SyncMessage(SyncMsgType.records, {'entries': records.map((r) => r.toJson()).toList()}).encode());
+          for (final record in records) {
+            transport.send(SyncMessage(SyncMsgType.records, {'entries': [record.toJson()]}).encode());
+          }
         }
         if (diff.uuidsToRequestFromPeer.isNotEmpty) {
           awaitingRecordsReply = true;
@@ -173,7 +175,9 @@ class SyncConnectionHandler {
         if (rawUuids == null) break;
         final uuids = rawUuids.cast<String>();
         final records = _wireRecordsFor(uuids);
-        transport.send(SyncMessage(SyncMsgType.records, {'entries': records.map((r) => r.toJson()).toList()}).encode());
+        for (final record in records) {
+          transport.send(SyncMessage(SyncMsgType.records, {'entries': [record.toJson()]}).encode());
+        }
         break;
 
       case SyncMsgType.records:
@@ -217,6 +221,17 @@ class SyncConnectionHandler {
       case SyncMsgType.authRequest:
         final requestId = message.payload['requestId'] as String?;
         if (requestId == null) break;
+        
+        final deviceId = message.payload['deviceId'] as String?;
+        if (deviceId != null) {
+          final existingPeer = _db.findDeviceById(deviceId);
+          if (existingPeer != null && existingPeer.revoked) {
+            transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
+            await transport.close();
+            return;
+          }
+        }
+
         final actionLabel = message.payload['actionLabel'] as String? ?? 'access a saved password';
         bool approved;
         try {

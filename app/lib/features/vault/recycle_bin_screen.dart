@@ -10,7 +10,50 @@ class RecycleBinScreen extends ConsumerWidget {
     ref.watch(dbListenerProvider);
     final entriesAsync = ref.watch(deletedEntriesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Recycle Bin', style: TextStyle(fontWeight: FontWeight.bold))),
+      appBar: AppBar(
+        title: const Text('Recycle Bin', style: TextStyle(fontWeight: FontWeight.bold)),
+        actions: [
+          entriesAsync.maybeWhen(
+            data: (entries) {
+              if (entries.isEmpty) return const SizedBox.shrink();
+              return PopupMenuButton<String>(
+                onSelected: (value) async {
+                  final repo = ref.read(vaultRepositoryProvider);
+                  if (value == 'restore') {
+                    for (final e in entries) await repo.restoreEntry(e.uuid);
+                  } else if (value == 'empty') {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (c) => AlertDialog(
+                        title: const Text('Empty Recycle Bin?'),
+                        content: const Text('All items will be permanently erased. This cannot be undone.'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Cancel')),
+                          FilledButton(
+                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            onPressed: () => Navigator.of(c).pop(true), 
+                            child: const Text('Empty All')
+                          ),
+                        ],
+                      ),
+                    ) ?? false;
+                    if (confirm) {
+                      for (final e in entries) await repo.hardDeleteEntry(e.uuid);
+                    }
+                  }
+                  ref.invalidate(deletedEntriesProvider);
+                  ref.invalidate(filteredEntriesProvider);
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(value: 'restore', child: Row(children: [Icon(Icons.restore), SizedBox(width: 8), Text('Restore all')])),
+                  PopupMenuItem(value: 'empty', child: Row(children: [Icon(Icons.delete_forever, color: Colors.red), SizedBox(width: 8), Text('Empty all', style: TextStyle(color: Colors.red))])),
+                ],
+              );
+            },
+            orElse: () => const SizedBox.shrink(),
+          ),
+        ],
+      ),
       body: entriesAsync.when(
         data: (entries) {
           if (entries.isEmpty) {

@@ -74,8 +74,10 @@ final deletedEntriesProvider = FutureProvider.autoDispose<List<VaultEntry>>((ref
 // Hook up cross-isolate file reactivity: if the DB is written to by a background isolate
 // (like the BLE Sync service), invalidate our UI lists immediately.
 final dbListenerProvider = Provider<void>((ref) {
-  VaultDatabase.instance.addListener(() {
+  final callback = () {
     ref.invalidate(filteredEntriesProvider);
     ref.invalidate(deletedEntriesProvider);
-  });
+  };
+  VaultDatabase.instance.addListener(callback);
+  ref.onDispose(() => VaultDatabase.instance.removeListener(callback));
 });

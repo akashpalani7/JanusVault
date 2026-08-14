@@ -83,8 +83,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen>
           );
       ref.read(vaultUnlockedProvider.notifier).state = true;
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const RecoveryScreen()));
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const RecoveryScreen()),
+          (route) => false,
+        );
       }
     } finally {
       if (mounted) setState(() => _creating = false);

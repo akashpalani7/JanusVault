@@ -1,10 +1,6 @@
-import 'dart:io';
-
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../app_providers.dart';
 import '../../core/storage/vault_database.dart';
 import '../../core/vault/vault_repository.dart';
 
@@ -38,122 +34,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     settings.requireBiometricForReveal = _requireBiometricForReveal;
     await VaultDatabase.instance.saveSettings(settings);
   }
-  
-  Future<void> _handleImportCsv() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.any);
-    if (result == null || result.files.single.path == null) return;
 
-    final file = File(result.files.single.path!);
-    final text = await file.readAsString();
-    
-    final rows = _parseCsv(text);
-    if (rows.length < 2) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No password data found in file.")));
-      return;
-    }
-
-    final header = rows[0].map((h) => h.trim().toLowerCase()).toList();
-    final urlIdx = header.indexOf("url");
-    final userIdx = header.indexOf("username");
-    final passIdx = header.indexOf("password");
-    final nameIdx = header.indexOf("name");
-
-    if (urlIdx == -1 || userIdx == -1 || passIdx == -1) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid CSV format (requires url, username, password columns).")));
-      return;
-    }
-
-    final existingEntries = await VaultRepository.instance.getAllEntries();
-
-    int saved = 0;
-    int skipped = 0;
-    
-    for (int i = 1; i < rows.length; i++) {
-      final cols = rows[i];
-      final url = urlIdx < cols.length ? cols[urlIdx].trim() : '';
-      final username = userIdx < cols.length ? cols[userIdx].trim() : '';
-      final password = passIdx < cols.length ? cols[passIdx].trim() : '';
-      
-      if (url.isEmpty || password.isEmpty) {
-        skipped++;
-        continue;
-      }
-      
-      String domain = url;
-      try {
-        if (!url.startsWith('http')) {
-          domain = Uri.parse('https://$url').host;
-        } else {
-          domain = Uri.parse(url).host;
-        }
-        if (domain.isEmpty) domain = url;
-      } catch (_) { }
-      
-      final websiteName = (nameIdx != -1 && nameIdx < cols.length && cols[nameIdx].trim().isNotEmpty) 
-          ? cols[nameIdx].trim() 
-          : domain;
-
-      if (existingEntries.any((e) => (e.websiteName == websiteName || e.websiteUrl == url || e.websiteUrl == domain) && e.username == username)) {
-        skipped++;
-        continue;
-      }
-
-      await VaultRepository.instance.createEntry(
-        websiteName: websiteName,
-        websiteUrl: domain,
-        username: username,
-        password: password,
-      );
-      saved++;
-    }
-
-    if (mounted) {
-      if (saved > 0) {
-        ref.invalidate(filteredEntriesProvider);
-      }
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imported $saved entries, skipped $skipped.")));
-    }
-  }
-
-  List<List<String>> _parseCsv(String text) {
-    // Basic CSV parser...
-    final List<List<String>> rows = [];
-    List<String> row = [];
-    String field = "";
-    bool inQuotes = false;
-
-    for (int i = 0; i < text.length; i++) {
-        final String c = text[i];
-        if (inQuotes) {
-            if (c == '"' && i + 1 < text.length && text[i + 1] == '"') {
-                field += '"';
-                i++;
-            } else if (c == '"') {
-                inQuotes = false;
-            } else {
-                field += c;
-            }
-        } else if (c == '"') {
-            inQuotes = true;
-        } else if (c == ',') {
-            row.add(field);
-            field = "";
-        } else if (c == '\n' || c == '\r') {
-            if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
-            row.add(field);
-            rows.add(row);
-            row = [];
-            field = "";
-        } else {
-            field += c;
-        }
-    }
-    if (field.isNotEmpty || row.isNotEmpty) {
-        row.add(field);
-        rows.add(row);
-    }
-    return rows.where((r) => r.any((cell) => cell.trim().isNotEmpty)).toList();
-  }
 
   @override
   void initState() {
@@ -209,9 +90,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   leading: const Icon(Icons.auto_delete_outlined),
                   title: const Text('Recycle Bin retention'),
                   subtitle: Text('Items deleted over $_retentionDays days ago are purged automatically'),
-                  trailing: DropdownMenu<int>(
-                    initialSelection: _retentionDays,
-                    onSelected: (v) async {
+                  trailing: DropdownButton<int>(
+                    value: _retentionDays,
+                    underline: const SizedBox.shrink(),
+                    borderRadius: BorderRadius.circular(12),
+                    onChanged: (v) async {
                       if (v == null || v == _retentionDays) return;
       
                       if (v < _retentionDays) {
@@ -260,12 +143,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Automatically purged $purged overdue entries.')));
                       }
                     },
-                    dropdownMenuEntries: const [
-                      DropdownMenuEntry(value: 7, label: '7 days'),
-                      DropdownMenuEntry(value: 14, label: '14 days'),
-                      DropdownMenuEntry(value: 30, label: '30 days'),
-                      DropdownMenuEntry(value: 60, label: '60 days'),
-                      DropdownMenuEntry(value: 90, label: '90 days'),
+                    items: const [
+                      DropdownMenuItem(value: 7, child: Text('7 days')),
+                      DropdownMenuItem(value: 14, child: Text('14 days')),
+                      DropdownMenuItem(value: 30, child: Text('30 days')),
+                      DropdownMenuItem(value: 60, child: Text('60 days')),
+                      DropdownMenuItem(value: 90, child: Text('90 days')),
                     ],
                   ),
                 ),
@@ -281,13 +164,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     }
                   },
                 ),
-                const Divider(height: 1),
-                ListTile(
-                  leading: const Icon(Icons.upload_file_outlined),
-                  title: const Text('Import from CSV'),
-                  subtitle: const Text('Restore passwords exported from Chrome, Brave, or Firefox'),
-                  onTap: _handleImportCsv,
-                ),
+
               ],
             ),
           ),

@@ -22,9 +22,14 @@
         
         <div class="pairing-option">
           <h3>Option 1: Pair over Wi-Fi</h3>
-          <p class="hint">Enter your phone's Local IP address (shown on its Sync screen) to connect instantly over Wi-Fi.</p>
+          <p class="hint">Enter your phone's Wi-Fi network address (shown on its Sync screen, e.g. janusvault.local) to connect instantly over Wi-Fi.</p>
+          <select id="lanPairNetworkSelect" style="margin-bottom: 8px; width: 100%; border: 1px solid var(--border-color); background: var(--surface-color); color: var(--text-main); border-radius: var(--border-radius); padding: 8px;">
+            <option value="wifi">Standard Wi-Fi (janusvault.local)</option>
+            <option value="hotspot">Mobile Hotspot (192.0.0.2:port)</option>
+            <option value="manual">Manual IP Entry</option>
+          </select>
           <div class="flex-row">
-            <input id="lanPairHostInput" type="text" placeholder="Phone IP (e.g. 192.168.1.5:51827)" />
+            <input id="lanPairHostInput" type="text" placeholder="janusvault.local:51827" value="janusvault.local:51827" />
             <button id="lanPairButton">Pair over Wi-Fi</button>
           </div>
         </div>
@@ -47,9 +52,14 @@
 
       <section id="phoneSection" class="hidden">
         <h2>Phone connection</h2>
-        <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's LAN address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
+        <p class="hint">Every reveal, autofill, and copy asks your phone to approve with its own fingerprint/PIN — there is no local fallback. Enter your phone's network address (shown on the phone's Sync screen), and make sure "Make this device visible for sync" is on there.</p>
+        <select id="syncNetworkSelect" style="margin-bottom: 8px; width: 100%; border: 1px solid var(--border-color); background: var(--surface-color); color: var(--text-main); border-radius: var(--border-radius); padding: 8px;">
+          <option value="wifi">Standard Wi-Fi (janusvault.local)</option>
+          <option value="hotspot">Mobile Hotspot (192.0.0.2:port)</option>
+          <option value="manual">Manual IP Entry</option>
+        </select>
         <div class="flex-row" style="margin-bottom: 8px;">
-          <input id="hostInput" type="text" placeholder="192.168.x.x:51827" />
+          <input id="hostInput" type="text" placeholder="janusvault.local:51827" value="janusvault.local:51827" />
           <button id="syncButton">Sync via Wi-Fi</button>
         </div>
         <button id="syncBleButton" class="secondary">Sync via Bluetooth</button>
@@ -85,7 +95,7 @@
         <input id="newWebsiteUrlInput" type="text" placeholder="Website URL (e.g. github.com)" />
         <input id="newUsernameInput" type="text" placeholder="Username or email" />
         <div class="flex-row">
-          <input id="newPasswordInput" type="password" placeholder="Password" />
+          <input id="newPasswordInput" type="text" placeholder="Password" />
         </div>
         
         <div class="checkbox-group">

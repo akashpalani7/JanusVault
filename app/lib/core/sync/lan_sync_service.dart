@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:bonsoir/bonsoir.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/services.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 
 import '../crypto/crypto_engine.dart';
@@ -145,6 +146,23 @@ class LanSyncService {
   
   void Function()? recordsUpdatedCallback;
 
+  static const _channel = MethodChannel('com.janusvault.app/main_auth');
+  int _lockRefCount = 0;
+
+  Future<void> _acquireLock() async {
+    _lockRefCount++;
+    if (_lockRefCount == 1) {
+      try { await _channel.invokeMethod('acquireMulticastLock'); } catch (_) {}
+    }
+  }
+
+  Future<void> _releaseLock() async {
+    if (_lockRefCount > 0) _lockRefCount--;
+    if (_lockRefCount == 0) {
+      try { await _channel.invokeMethod('releaseMulticastLock'); } catch (_) {}
+    }
+  }
+
   HttpServer? _server;
   BonsoirBroadcast? _broadcast;
   BonsoirDiscovery? _discovery;
@@ -174,6 +192,8 @@ class LanSyncService {
   Future<void> startAdvertisingAndServing({required String deviceDisplayName}) async {
     if (isHosting) return;
     
+    await _acquireLock();
+
     try {
       _server ??= await HttpServer.bind(InternetAddress.anyIPv4, 51827);
     } catch (_) {
@@ -216,6 +236,8 @@ class LanSyncService {
       try { await _server!.close(force: true); } catch (_) {}
       _server = null;
     }
+    
+    await _releaseLock();
   }
 
   void _handlePeerConnection(WebSocket socket) {
@@ -459,6 +481,7 @@ class LanSyncService {
   Future<String?> getSelfLanAddress() => NetworkInfo().getWifiIP();
 
   Future<List<DiscoveredPeer>> discoverPeers({Duration timeout = const Duration(seconds: 4)}) async {
+    await _acquireLock();
     final found = <DiscoveredPeer>[];
     _discovery = BonsoirDiscovery(type: kServiceType);
     await _discovery!.ready;
@@ -475,6 +498,7 @@ class LanSyncService {
     await _discovery!.start();
     await completer;
     await _discovery!.stop();
+    await _releaseLock();
     return found;
   }
 

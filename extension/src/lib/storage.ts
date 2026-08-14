@@ -10,6 +10,7 @@ const DEVICE_DISPLAY_NAME_KEY = "janusvault.device_display_name";
 const LAST_HOST_KEY = "janusvault.last_sync_host"; // "host:port" — where to reach the phone for both sync AND every auth approval
 const AUTH_METHOD_KEY = "janusvault.auth_method"; // "wifi" or "bluetooth"
 const DEVICE_LIST_KEY = "janusvault.known_devices"; // non-secret metadata received via sync's deviceInfo messages
+const LAST_BLE_DEVICE_ID_KEY = "janusvault.last_ble_device_id"; // optimization: try this BLE device first
 
 /**
  * chrome.storage.local is sandboxed per-extension but is NOT hardware
@@ -101,6 +102,14 @@ export class ExtensionStorage {
 
   static async saveDeviceId(id: string): Promise<void> {
     await this._set(DEVICE_ID_KEY, id);
+  }
+
+  static async getLastBleDeviceId(): Promise<string | null> {
+    return (await this._get(LAST_BLE_DEVICE_ID_KEY)) ?? null;
+  }
+
+  static async setLastBleDeviceId(id: string): Promise<void> {
+    await this._set(LAST_BLE_DEVICE_ID_KEY, id);
   }
 
   static async getPairedAt(): Promise<string | null> {

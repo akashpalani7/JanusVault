@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,6 +13,7 @@ import '../settings/settings_screen.dart';
 import '../sync/sync_screen.dart';
 import '../vault/recycle_bin_screen.dart';
 import '../vault/vault_list_screen.dart';
+import '../../core/vault/vault_repository.dart';
 
 class MainScreen extends ConsumerStatefulWidget {
   const MainScreen({super.key});
@@ -18,12 +22,141 @@ class MainScreen extends ConsumerStatefulWidget {
   ConsumerState<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends ConsumerState<MainScreen> {
+class _MainScreenState extends ConsumerState<MainScreen> with SingleTickerProviderStateMixin {
   int _currentIndex = 0;
   bool _isLockedHover = false;
+  late final TabController _syncTabController;
 
-  void _showMoreMenu() {
-    showModalBottomSheet(
+  @override
+  void initState() {
+    super.initState();
+    _syncTabController = TabController(length: 3, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _syncTabController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleImportCsv() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    if (result == null || result.files.single.path == null) return;
+
+    final file = File(result.files.single.path!);
+    final text = await file.readAsString();
+    
+    final rows = _parseCsv(text);
+    if (rows.length < 2) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No password data found in file.")));
+      return;
+    }
+
+    final header = rows[0].map((h) => h.trim().toLowerCase()).toList();
+    final urlIdx = header.indexOf("url");
+    final userIdx = header.indexOf("username");
+    final passIdx = header.indexOf("password");
+    final nameIdx = header.indexOf("name");
+
+    if (urlIdx == -1 || userIdx == -1 || passIdx == -1) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Invalid CSV format (requires url, username, password columns).")));
+      return;
+    }
+
+    final existingEntries = await VaultRepository.instance.getAllEntries();
+
+    int saved = 0;
+    int skipped = 0;
+    
+    for (int i = 1; i < rows.length; i++) {
+      final cols = rows[i];
+      final url = urlIdx < cols.length ? cols[urlIdx].trim() : '';
+      final username = userIdx < cols.length ? cols[userIdx].trim() : '';
+      final password = passIdx < cols.length ? cols[passIdx].trim() : '';
+      
+      if (url.isEmpty || password.isEmpty) {
+        skipped++;
+        continue;
+      }
+      
+      String domain = url;
+      try {
+        if (!url.startsWith('http')) {
+          domain = Uri.parse('https://$url').host;
+        } else {
+          domain = Uri.parse(url).host;
+        }
+        if (domain.isEmpty) domain = url;
+      } catch (_) { }
+      
+      final websiteName = (nameIdx != -1 && nameIdx < cols.length && cols[nameIdx].trim().isNotEmpty) 
+          ? cols[nameIdx].trim() 
+          : domain;
+
+      if (existingEntries.any((e) => (e.websiteName == websiteName || e.websiteUrl == url || e.websiteUrl == domain) && e.username == username)) {
+        skipped++;
+        continue;
+      }
+
+      await VaultRepository.instance.createEntry(
+        websiteName: websiteName,
+        websiteUrl: domain,
+        username: username,
+        password: password,
+      );
+      saved++;
+    }
+
+    if (mounted) {
+      if (saved > 0) {
+        ref.invalidate(filteredEntriesProvider);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Imported $saved entries, skipped $skipped.")));
+    }
+  }
+
+  List<List<String>> _parseCsv(String text) {
+    // Basic CSV parser...
+    final List<List<String>> rows = [];
+    List<String> row = [];
+    String field = "";
+    bool inQuotes = false;
+
+    for (int i = 0; i < text.length; i++) {
+        final String c = text[i];
+        if (inQuotes) {
+            if (c == '"' && i + 1 < text.length && text[i + 1] == '"') {
+                field += '"';
+                i++;
+            } else if (c == '"') {
+                inQuotes = false;
+            } else {
+                field += c;
+            }
+        } else if (c == '"') {
+            inQuotes = true;
+        } else if (c == ',') {
+            row.add(field);
+            field = "";
+        } else if (c == '\n' || c == '\r') {
+            if (c == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
+            row.add(field);
+            rows.add(row);
+            row = [];
+            field = "";
+        } else {
+            field += c;
+        }
+    }
+    if (field.isNotEmpty || row.isNotEmpty) {
+        row.add(field);
+        rows.add(row);
+    }
+    return rows.where((r) => r.any((cell) => cell.trim().isNotEmpty)).toList();
+  }
+
+  Future<void> _showMoreMenu() {
+    return showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -68,6 +201,15 @@ class _MainScreenState extends ConsumerState<MainScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.of(context).push(MaterialPageRoute(builder: (_) => const RecycleBinScreen()));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.upload_file_outlined),
+                title: const Text('Import from CSV'),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _handleImportCsv();
                 },
               ),
               ListTile(
@@ -117,6 +259,7 @@ class _MainScreenState extends ConsumerState<MainScreen> {
       return AppBar(
         title: const Text('Sync Vault', style: TextStyle(fontWeight: FontWeight.bold)),
         bottom: TabBar(
+          controller: _syncTabController,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           indicator: BoxDecoration(
             borderRadius: BorderRadius.circular(50),
@@ -144,23 +287,25 @@ class _MainScreenState extends ConsumerState<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: _buildAppBar(),
-        body: IndexedStack(
-          index: _currentIndex,
-          children: const [
-            VaultListScreen(),
-            SyncScreen(),
-            DevicesScreen(),
-          ],
+    return Scaffold(
+      appBar: _buildAppBar(),
+      body: IndexedStack(
+        index: _currentIndex > 2 ? 0 : _currentIndex,
+        children: [
+          const VaultListScreen(),
+          SyncScreen(controller: _syncTabController),
+          const DevicesScreen(),
+        ],
         ),
         bottomNavigationBar: NavigationBar(
           selectedIndex: _currentIndex,
           onDestinationSelected: (index) {
             if (index == 3) {
-              _showMoreMenu();
+              final previousIndex = _currentIndex;
+              setState(() => _currentIndex = index);
+              _showMoreMenu().whenComplete(() {
+                if (mounted) setState(() => _currentIndex = previousIndex);
+              });
             } else {
               setState(() => _currentIndex = index);
             }
@@ -172,7 +317,6 @@ class _MainScreenState extends ConsumerState<MainScreen> {
             NavigationDestination(icon: Icon(Icons.menu), selectedIcon: Icon(Icons.menu), label: 'More'),
           ],
         ),
-      ),
     );
   }
 }

@@ -16,6 +16,7 @@ class VaultListScreen extends ConsumerStatefulWidget {
 class _VaultListScreenState extends ConsumerState<VaultListScreen> {
   bool _autoSynced = false;
   final ScrollController _scrollController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
   bool _isFabExtended = true;
 
   @override
@@ -33,6 +34,7 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
 
   @override
   void dispose() {
+    _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -45,7 +47,9 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
     // Automatically make device visible for sync
     try {
       await syncService.startAdvertisingAndServing(deviceDisplayName: 'JanusVault');
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Auto-sync server error: $e');
+    }
 
     // Auto-discover and sync with peers
     try {
@@ -56,9 +60,16 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
           if (mounted) {
             ref.invalidate(filteredEntriesProvider);
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('Auto-sync peer error: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to sync with peer: $e'), duration: const Duration(seconds: 2)));
+          }
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Auto-sync discovery error: $e');
+    }
   }
 
   Color _getHashColor(String text) {
@@ -85,6 +96,7 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: SearchBar(
+                controller: _searchController,
                 leading: const Icon(Icons.search, color: Colors.grey),
                 hintText: 'Search vault…',
                 elevation: WidgetStateProperty.all(2),
@@ -102,6 +114,7 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
                         if (!currentFocus.hasPrimaryFocus) {
                           currentFocus.unfocus();
                         }
+                        _searchController.clear();
                         ref.read(searchQueryProvider.notifier).state = '';
                       },
                     ),
@@ -154,6 +167,19 @@ class _VaultListScreenState extends ConsumerState<VaultListScreen> {
                           ),
                           child: const Icon(Icons.delete, color: Colors.white),
                         ),
+                        confirmDismiss: (direction) async {
+                          return await showDialog<bool>(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              title: const Text('Move to Recycle Bin?'),
+                              content: const Text('This entry will be moved to the recycle bin.'),
+                              actions: [
+                                TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+                                TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Move')),
+                              ],
+                            ),
+                          ) ?? false;
+                        },
                         onDismissed: (direction) async {
                           await ref.read(vaultRepositoryProvider).softDeleteEntry(entry.uuid);
                           ref.invalidate(filteredEntriesProvider);

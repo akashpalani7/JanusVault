@@ -107,9 +107,19 @@ async function executeBleAuth(actionLabel: string, requestId: string, authKeyRaw
                             await sendJsonMessage(JSON.stringify({ type: "helloResponse", payload: { mac } }));
                         } else if (msg.type === "deviceInfo" && !authRequestSent) {
                             authRequestSent = true;
-                            await sendJsonMessage(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel } }));
+                            const deviceId = await ExtensionStorage.getDeviceId();
+                            await sendJsonMessage(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel, deviceId } }));
                         } else if (msg.type === "authResponse" && msg.payload.requestId === requestId) {
                             finish(!!msg.payload.approved);
+                        } else if (msg.type === "error") {
+                            const errMsg = (msg.payload.message || "") as string;
+                            if (errMsg.toLowerCase().includes("revoked")) {
+                                await ExtensionStorage.wipeAll();
+                                chrome.runtime.sendMessage({ type: "LOCK_VAULT" }).catch(() => {});
+                                finish(false, new Error(errMsg));
+                            } else {
+                                finish(false, new Error(errMsg));
+                            }
                         }
                     } catch (e) {
                         console.error("BLE auth JSON parsing error", e);
@@ -131,7 +141,7 @@ async function executeBleAuth(actionLabel: string, requestId: string, authKeyRaw
     });
 }
 
-async function connectToDevice(paired: BluetoothDevice): Promise<{
+async function connectToDevice(paired: BluetoothDevice, isFallback = false): Promise<{
     device: BluetoothDevice;
     char: BluetoothRemoteGATTCharacteristic;
 }> {
@@ -188,7 +198,7 @@ async function connectToDevice(paired: BluetoothDevice): Promise<{
     // connect(). On Windows, if watchAdvertisements() timed out above,
     // the retries give the OS BLE cache time to refresh.
     let server: BluetoothRemoteGATTServer;
-    const maxRetries = isMacOS ? 5 : 4;
+    const maxRetries = isFallback ? 1 : (isMacOS ? 5 : 4);
     const retryDelay = isMacOS ? 800 : 1000;
     for (let i = 0; i < maxRetries; i++) {
         try {
@@ -218,16 +228,33 @@ async function connectToDevice(paired: BluetoothDevice): Promise<{
     return { device: paired, char };
 }
 
+async function getOrderedDevices(): Promise<BluetoothDevice[]> {
+    const devices = await navigator.bluetooth.getDevices();
+    if (devices.length === 0) throw new Error('No previously paired JanusVault device found.');
+    let preferredDevId: string | null = null;
+    try { preferredDevId = await ExtensionStorage.getLastBleDeviceId(); } catch(e){}
+    if (preferredDevId) {
+        const prefDev = devices.find(d => d.id === preferredDevId);
+        if (prefDev) {
+            return [prefDev, ...devices.filter(d => d.id !== preferredDevId)];
+        }
+    }
+    return devices;
+}
+
 async function connectToAuthorizedDevice(): Promise<{
     device: BluetoothDevice;
     char: BluetoothRemoteGATTCharacteristic;
 }> {
-    const devices = await navigator.bluetooth.getDevices();
-    if (devices.length === 0) throw new Error('No previously paired JanusVault device found.');
+    const devices = await getOrderedDevices();
+    const preferredId = devices[0]?.id;
     let lastErr;
     for (const dev of devices) {
         try {
-            return await connectToDevice(dev);
+            const isFallback = (dev.id !== preferredId) || false;
+            const result = await connectToDevice(dev, isFallback);
+            ExtensionStorage.setLastBleDeviceId(dev.id).catch(()=>{});
+            return result;
         } catch (e) {
             lastErr = e;
         }
@@ -236,8 +263,8 @@ async function connectToAuthorizedDevice(): Promise<{
 }
 
 async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{ ok: boolean, pulled: number, pushed: number }> {
-    const devices = await navigator.bluetooth.getDevices();
-    if (devices.length === 0) throw new Error('No previously paired JanusVault device found.');
+    const devices = await getOrderedDevices();
+    const preferredId = devices[0]?.id;
 
     let totalPulled = 0;
     let totalPushed = 0;
@@ -247,7 +274,9 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
     for (const paired of devices) {
         try {
             incomingBuffer = '';
-            const { device, char } = await connectToDevice(paired);
+            const isFallback = (paired.id !== preferredId) || false;
+            const { device, char } = await connectToDevice(paired, isFallback);
+            ExtensionStorage.setLastBleDeviceId(paired.id).catch(()=>{});
 
             await new Promise<void>(async (resolve, reject) => {
                 let inboundBuffer = "";
@@ -301,6 +330,7 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
                     const dataView = event.target.value;
                     const text = new TextDecoder().decode(dataView);
                     inboundBuffer += text;
+                    transport.onActivity?.();
 
                     while (inboundBuffer.includes(EOM_MARKER)) {
                         const eomIdx = inboundBuffer.indexOf(EOM_MARKER);

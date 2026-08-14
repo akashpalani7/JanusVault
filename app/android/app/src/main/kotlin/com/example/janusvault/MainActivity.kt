@@ -19,10 +19,18 @@ class MainActivity : FlutterFragmentActivity() {
         val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.janusvault.app/main_auth")
         mainChannel = channel
         
+        val multicastLockManager = MulticastLockManager(this)
+        
         channel.setMethodCallHandler { call, result ->
             if (call.method == "showApprovalNotification") {
                 val actionLabel = (call.arguments as? Map<*, *>)?.get("actionLabel") as? String ?: "access a saved password"
                 ApprovalNotifier.show(applicationContext, actionLabel)
+                result.success(null)
+            } else if (call.method == "acquireMulticastLock") {
+                multicastLockManager.acquire()
+                result.success(null)
+            } else if (call.method == "releaseMulticastLock") {
+                multicastLockManager.release()
                 result.success(null)
             } else {
                 result.notImplemented()

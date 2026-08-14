@@ -207,6 +207,53 @@ function offerAutofill(passwordField: FoundField, entries: MatchEntry[]) {
       });
       dropdown.appendChild(item);
     }
+    
+    const separator = document.createElement("div");
+    separator.style.height = "1px";
+    separator.style.backgroundColor = "#4a4a4a";
+    separator.style.margin = "4px 0";
+    dropdown.appendChild(separator);
+
+    const generateItem = document.createElement("div");
+    generateItem.style.padding = "8px 16px";
+    generateItem.style.cursor = "pointer";
+    generateItem.style.color = "#ffffff";
+    generateItem.style.fontFamily = "system-ui, sans-serif";
+    generateItem.style.fontSize = "14px";
+    generateItem.style.display = "flex";
+    generateItem.style.alignItems = "center";
+    generateItem.style.gap = "8px";
+    generateItem.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/></svg> Generate new password`;
+    
+    generateItem.addEventListener("mouseover", () => { generateItem.style.backgroundColor = "#3d3d3d"; });
+    generateItem.addEventListener("mouseout", () => { generateItem.style.backgroundColor = "transparent"; });
+    
+    generateItem.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      dropdown.remove();
+      const hostForm = passwordField.input.closest('form');
+      let passwordFields: FoundField[] = [];
+      if (hostForm) {
+        passwordFields = Array.from(hostForm.querySelectorAll('input[type="password"]'))
+          .filter(input => (input as HTMLElement).offsetWidth > 0 || (input as HTMLElement).offsetHeight > 0)
+          .map(input => ({ input: input as HTMLInputElement, score: 100, kind: "password" as const }));
+      }
+      if (passwordFields.length === 0) {
+        passwordFields = [passwordField];
+      }
+      
+      let panel: HTMLDivElement | null = null;
+      panel = buildSuggestionPanel(passwordFields, () => {
+        panel?.remove();
+        panel = null;
+        chip.remove();
+      }, () => {
+        panel?.remove();
+        panel = null;
+      });
+      chip.after(panel);
+    });
+    dropdown.appendChild(generateItem);
 
     const outsideListener = (ev: MouseEvent) => {
       if (!dropdown.contains(ev.target as Node) && ev.target !== chip) {
@@ -255,6 +302,9 @@ function offerNewPasswordSuggestion(passwordFields: FoundField[]) {
       panel?.remove();
       panel = null;
       chip.remove();
+    }, () => {
+      panel?.remove();
+      panel = null;
     });
     chip.after(panel);
   });
@@ -262,7 +312,7 @@ function offerNewPasswordSuggestion(passwordFields: FoundField[]) {
   document.body.appendChild(chip);
 }
 
-function buildSuggestionPanel(passwordFields: FoundField[], onDone: () => void): HTMLDivElement {
+function buildSuggestionPanel(passwordFields: FoundField[], onDone: () => void, onCancel?: () => void): HTMLDivElement {
   const panel = document.createElement("div");
   Object.assign(panel.style, {
     position: "absolute",
@@ -295,7 +345,11 @@ function buildSuggestionPanel(passwordFields: FoundField[], onDone: () => void):
 
   const useBtn = document.createElement("button");
   useBtn.textContent = "Use this password";
-  Object.assign(useBtn.style, { cursor: "pointer", border: "none", borderRadius: "4px", padding: "5px 8px", background: "#4b4bff", color: "white", width: "100%" });
+  Object.assign(useBtn.style, { cursor: "pointer", border: "none", borderRadius: "4px", padding: "5px 8px", background: "#4b4bff", color: "white", width: "100%", marginBottom: "6px" });
+  
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  Object.assign(cancelBtn.style, { cursor: "pointer", border: "none", borderRadius: "4px", padding: "5px 8px", background: "#444444", color: "white", width: "100%" });
 
   let current = generateStrongPassword(Number(slider.value));
   const refresh = () => {
@@ -306,16 +360,33 @@ function buildSuggestionPanel(passwordFields: FoundField[], onDone: () => void):
   refresh();
 
   slider.addEventListener("input", refresh);
+  
+  const outsideListener = (ev: MouseEvent) => {
+    const isChip = (ev.target as HTMLElement)?.closest('#janusvault-suggest-chip, #janusvault-autofill-chip');
+    if (!panel.contains(ev.target as Node) && !isChip) {
+      document.removeEventListener("click", outsideListener);
+      if (onCancel) onCancel();
+    }
+  };
+  setTimeout(() => document.addEventListener("click", outsideListener), 0);
+
   useBtn.addEventListener("click", () => {
     for (const field of passwordFields) {
       field.input.value = current;
       field.input.dispatchEvent(new Event("input", { bubbles: true }));
       field.input.dispatchEvent(new Event("change", { bubbles: true }));
     }
+    document.removeEventListener("click", outsideListener);
     onDone();
   });
+  
+  cancelBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    document.removeEventListener("click", outsideListener);
+    if (onCancel) onCancel();
+  });
 
-  panel.append(preview, slider, lengthLabel, useBtn);
+  panel.append(preview, slider, lengthLabel, useBtn, cancelBtn);
   return panel;
 }
 
@@ -431,7 +502,16 @@ function showSaveBanner(domain: string, username: string, password: string) {
   banner.appendChild(dismissBtn);
   document.body.appendChild(banner);
   
+  const cleanupId = setInterval(() => {
+    if (anchor && !document.body.contains(anchor) && banner.parentElement) {
+      banner.remove();
+      resolveSave();
+      clearInterval(cleanupId);
+    }
+  }, 500);
+
   setTimeout(() => {
+    clearInterval(cleanupId);
     if (banner.parentElement) {
       banner.remove();
       resolveSave();

@@ -274,8 +274,8 @@ async function findMatchesForDomain(domain: string) {
 
   const all = await ExtensionStorage.getAllEntries();
   const normalizedDomain = domain.replace(/^www\./, "").toLowerCase();
-  const tokenizedDomain = normalizedDomain.replace(/\./g, " ").replace(/ com /g, " ").trim();
-  const domainTokens = tokenizedDomain.split(" ").filter(t => t.length > 0);
+  const genericTlds = new Set(["com", "org", "net", "io", "co", "uk", "in", "app", "dev"]);
+  const domainTokens = normalizedDomain.split(".").filter(t => t.length > 2 && !genericTlds.has(t));
   
   const matches: unknown[] = [];
   for (const record of all) {
@@ -284,9 +284,7 @@ async function findMatchesForDomain(domain: string) {
     if (!decrypted) continue;
     const haystack = `${decrypted.websiteName} ${decrypted.websiteUrl}`.toLowerCase();
     
-    // Match either the full domain, the tokenized domain ("leetcode com"), or any individual meaningful part
     if (haystack.includes(normalizedDomain) || 
-        haystack.includes(tokenizedDomain) || 
         domainTokens.some(t => haystack.includes(t))) {
       matches.push({ uuid: decrypted.uuid, websiteName: decrypted.websiteName, username: decrypted.username });
     }
@@ -504,10 +502,11 @@ async function attemptBackgroundSync(): Promise<void> {
        if (result?.rotated) {
          cachedVek = null;
        }
-     } catch {
+       return;
+     } catch (err) {
+       console.log("[Ext/Worker] Background BLE sync failed, silently falling back to WiFi...");
        if (!(await ExtensionStorage.getDeviceId())) cachedVek = null;
      }
-     return;
   }
 
   const hosts = await ExtensionStorage.getKnownHosts();
@@ -641,8 +640,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case "UPDATE_CREDENTIAL":
         sendResponse(await updateCredential(message.uuid, message.websiteName, message.websiteUrl, message.username, message.password));
         break;
-      case "IS_UNLOCKED":
-        sendResponse({ unlocked: (await getVek()) !== null });
+      case "IS_UNLOCKED": {
+        const vek = await getVek();
+        if (vek) {
+          const deviceId = await ExtensionStorage.getDeviceId();
+          if (!deviceId) {
+            cachedVek = null;
+            sendResponse({ unlocked: false });
+            return;
+          }
+        }
+        sendResponse({ unlocked: !!vek });
+        break;
+      }
+      case "LOCK_VAULT":
+        cachedVek = null;
+        sendResponse({ ok: true });
         break;
       case "SYNC_WITH_PHONE": {
         const vek = await getVek();
@@ -696,8 +709,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         break;
       case "BLE_PAIR_DEVICE":
+        const nameParam = message.deviceName ? `&name=${encodeURIComponent(message.deviceName)}` : '';
         chrome.windows.create({
-            url: chrome.runtime.getURL('popup/popup.html?mode=ble-pair'),
+            url: chrome.runtime.getURL(`popup/popup.html?mode=ble-pair${nameParam}`),
             type: "normal",
             width: 450,
             height: 450,

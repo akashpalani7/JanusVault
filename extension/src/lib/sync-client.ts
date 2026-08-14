@@ -31,6 +31,7 @@ export interface SyncTransport {
   close(): void;
   onMessage: ((message: string) => void) | null;
   onError: ((err: Error) => void) | null;
+  onActivity?: () => void;
 }
 
 export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number; rotated?: boolean }> {
@@ -137,14 +138,18 @@ export async function runSyncProtocol(
           const entries = message.payload.entries as EncryptedEntryRecord[];
           await ExtensionStorage.upsertEntries(entries);
           pulled += entries.length;
+          chrome.runtime.sendMessage({ type: "SYNC_PROGRESS", pulled, pushed }).catch(() => {});
           break;
         }
         case "request": {
           const uuids = message.payload.uuids as string[];
           const mine = await ExtensionStorage.getAllEntries();
           const requested = mine.filter((e) => uuids.includes(e.uuid));
-          await transport.send(JSON.stringify({ type: "records", payload: { entries: requested } } satisfies SyncMessage));
-          pushed += requested.length;
+          for (const req of requested) {
+            await transport.send(JSON.stringify({ type: "records", payload: { entries: [req] } } satisfies SyncMessage));
+            pushed += 1;
+            chrome.runtime.sendMessage({ type: "SYNC_PROGRESS", pulled, pushed }).catch(() => {});
+          }
           break;
         }
         case "deviceInfo": {
@@ -200,8 +205,13 @@ export async function runSyncProtocol(
           return;
         }
         case "error": {
+          const errMsg = message.payload.message as string;
+          if (errMsg.toLowerCase().includes("revoked")) {
+             await ExtensionStorage.wipeAll();
+             await chrome.runtime.sendMessage({ type: "LOCK_VAULT" }).catch(() => {});
+          }
           transport.close();
-          reject(new Error((message.payload.message as string) ?? "Unknown sync error"));
+          reject(new Error(errMsg ?? "Unknown sync error"));
           break;
         }
         case "vekRotation": {
@@ -281,6 +291,9 @@ export async function runSyncProtocol(
   transport.onMessage = (msg) => {
     resetQuietTimer();
     return originalOnMessage?.(msg);
+  };
+  transport.onActivity = () => {
+    resetQuietTimer();
   };
 
   console.log(`Sync transport: Opened connection. Sending hello challenge...`);

@@ -198,6 +198,7 @@ class VaultDatabase {
   final List<void Function()> _listeners = [];
 
   void addListener(void Function() listener) => _listeners.add(listener);
+  void removeListener(void Function() listener) => _listeners.remove(listener);
 
   void _startPolling() {
     _pollTimer ??= Timer.periodic(const Duration(seconds: 2), (_) async {

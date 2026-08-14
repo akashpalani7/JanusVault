@@ -157,9 +157,10 @@ class BleGattService {
   WriteRequestResult? _onWriteRequest(
       String deviceId, String characteristicId, int offset, Uint8List? value) {
     if (_activeDeviceId != null && _activeDeviceId != deviceId) {
-      print(
-          'BleGattService: Rejecting write from unexpected device $deviceId (active: $_activeDeviceId)');
-      return WriteRequestResult(status: 0);
+      print('BleGattService: Automatically terminating stale connection $_activeDeviceId because another device ($deviceId) wrote data!');
+      _handler = null;
+      _incomingBuffer.clear();
+      _activeDeviceId = deviceId;
     }
     _activeDeviceId ??= deviceId;
 
@@ -259,7 +260,6 @@ class BleGattService {
         BlePeripheral.updateCharacteristic(
           characteristicId: kSyncCharacteristicUuid,
           value: chunk,
-          deviceId: deviceId, // restore deviceId targeting
         );
         print(
             'BleGattService: updateCharacteristic returned successfully for chunk');
@@ -320,8 +320,9 @@ class _BleTransport implements SyncTransport {
 
   @override
   Future<void> close() async {
-    _queue.clear();
-    _processing = false;
+    while (_queue.isNotEmpty || _processing) {
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
     BleGattService.instance._handler = null;
     BleGattService.instance._incomingBuffer.clear();
     BleGattService.instance._activeDeviceId = null;

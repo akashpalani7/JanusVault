@@ -21,9 +21,13 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
   void initState() {
     super.initState();
     _devices = ref.read(deviceManagerProvider).listDevices();
+    _devices.sort((a, b) => a.revoked == b.revoked ? 0 : (a.revoked ? 1 : -1));
   }
 
-  void _refresh() => setState(() => _devices = ref.read(deviceManagerProvider).listDevices());
+  void _refresh() => setState(() {
+    _devices = ref.read(deviceManagerProvider).listDevices();
+    _devices.sort((a, b) => a.revoked == b.revoked ? 0 : (a.revoked ? 1 : -1));
+  });
 
   IconData _iconFor(DevicePlatform platform) {
     switch (platform) {
@@ -154,6 +158,48 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                   );
                                   if (confirm == true) {
                                     await deviceManager.revokeDevice(d.deviceId);
+                                    if (mounted) {
+                                      final rotate = await showDialog<bool>(
+                                        context: context,
+                                        barrierDismissible: false,
+                                        builder: (c) => AlertDialog(
+                                          title: const Text('Rotate vault key?'),
+                                          content: Text(
+                                              'If you suspect "${d.displayName}" was stolen or compromised, you must rotate your encryption key to prevent it from decrypting new data.\n\n'
+                                              'This requires re-encrypting your entire vault. Do not close the app.'),
+                                          actions: [
+                                            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Skip')),
+                                            FilledButton(
+                                              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                                              onPressed: () => Navigator.of(c).pop(true), 
+                                              child: const Text('Rotate Key'),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                      if (rotate == true) {
+                                        showDialog(
+                                          context: context,
+                                          barrierDismissible: false,
+                                          builder: (c) => const AlertDialog(
+                                            content: Row(
+                                              children: [
+                                                CircularProgressIndicator(),
+                                                SizedBox(width: 16),
+                                                Expanded(child: Text('Rotating key and re-encrypting vault (do not close)...')),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                        try {
+                                          final selfId = ref.read(deviceManagerProvider).selfDeviceInfo()!.deviceId;
+                                          final newVek = await ref.read(deviceManagerProvider).rotateVek(selfDeviceId: selfId);
+                                          await ref.read(vaultRepositoryProvider).reencryptAllWithNewVek(newVek);
+                                        } finally {
+                                          if (mounted) Navigator.of(context).pop(); // dismiss progress
+                                        }
+                                      }
+                                    }
                                     _refresh();
                                   }
                                 },

@@ -75,7 +75,32 @@ JanusVault uses dual-transport for reliability. Let's test the fallback system:
 
 ---
 
-## 6️⃣ Troubleshooting & Testing Configurations
+## 6️⃣ Advanced Security & Revocation (The "Wipe" Test)
+
+1. **Revoke a Device:** On the Android app, go to **Devices** and click the red "Revoke device" icon next to a paired browser. Confirm the revocation.
+2. **VEK Rotation:** When prompted during revocation, choose **Rotate Key**. *Verify that Android successfully re-encrypts the vault without crashing.*
+3. **The Wipe Protocol:** Open the *revoked* browser extension on the PC and attempt an Autofill on any webpage or sync.
+4. Verify that the Android app *instantly physically rejects the connection* behind the scenes, and the Chrome extension *immediately wipes its memory* and locks itself, booting you back to the "Pair New Device" screen!
+
+---
+
+## 7️⃣ Network Transport Testing (Wi-Fi vs Mobile Hotspot)
+
+If standard mDNS `.local` resolution fails on corporate/public Wi-Fi networks (which frequently block local cross-talk):
+1. Keep the PC paired. In the Chrome extension, click the Network dropdown and switch from **Wi-Fi** to **Mobile Hotspot**. 
+2. *Verify that the extension automatically fills the static target IP to `192.0.0.2:51827`.*
+3. Turn on your Android phone's Mobile Hotspot and connect your PC to it directly.
+4. Try to autofill or sync. Verify that the PC can bypass the blocked local network by tunneling directly into the Android app over the static host IP without requiring `.local` Bonjour resolution.
+
+---
+
+## 8️⃣ UI Refinements 
+* **Cancel Generated Passwords**: Open the extension popup, click "Generate Password", and try explicitly clicking the new "Cancel" button or clicking "outside" the modal box to ensure the UI closes smoothly.
+* **Autofill Domain Filtering**: When clicking the credential inline-popup on a domain like `example.com`, verify that it strictly lists passwords for `example.com` and does *not* accidentally list credentials for completely unrelated `.com` domains in the dropdown.
+
+---
+
+## 9️⃣ Troubleshooting & Testing Configurations
 
 **Extension Testing (Disabling Built-in Browser Autofill)**
 To properly evaluate the JanusVault browser extension without UI glitches, you must disable the browser's native password manager:

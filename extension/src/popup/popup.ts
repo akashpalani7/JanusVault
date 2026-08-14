@@ -19,6 +19,18 @@ const searchInput = document.getElementById("searchInput") as HTMLInputElement;
 const resultsList = document.getElementById("resultsList") as HTMLUListElement;
 const emptyHint = document.getElementById("emptyHint") as HTMLParagraphElement;
 const hostInput = document.getElementById("hostInput") as HTMLInputElement;
+const syncNetworkSelect = document.getElementById("syncNetworkSelect") as HTMLSelectElement;
+syncNetworkSelect?.addEventListener("change", () => {
+  if (syncNetworkSelect.value === "hotspot") {
+    hostInput.value = "192.0.0.2:";
+  } else if (syncNetworkSelect.value === "wifi") {
+    hostInput.value = "janusvault.local:51827";
+  } else {
+    hostInput.value = "";
+    hostInput.placeholder = "192.168.x.x:51827";
+  }
+  hostInput.focus();
+});
 const syncButton = document.getElementById("syncButton") as HTMLButtonElement;
 const syncBleButton = document.getElementById("syncBleButton") as HTMLButtonElement;
 const authMethodSelect = document.getElementById("authMethodSelect") as HTMLSelectElement;
@@ -27,6 +39,18 @@ const deviceNameInput = document.getElementById("deviceNameInput") as HTMLInputE
 const pairingInput = document.getElementById("pairingInput") as HTMLTextAreaElement;
 const pairButton = document.getElementById("pairButton") as HTMLButtonElement;
 const lanPairHostInput = document.getElementById("lanPairHostInput") as HTMLInputElement;
+const lanPairNetworkSelect = document.getElementById("lanPairNetworkSelect") as HTMLSelectElement;
+lanPairNetworkSelect?.addEventListener("change", () => {
+  if (lanPairNetworkSelect.value === "hotspot") {
+    lanPairHostInput.value = "192.0.0.2:";
+  } else if (lanPairNetworkSelect.value === "wifi") {
+    lanPairHostInput.value = "janusvault.local:51827";
+  } else {
+    lanPairHostInput.value = "";
+    lanPairHostInput.placeholder = "192.168.x.x:51827";
+  }
+  lanPairHostInput.focus();
+});
 const lanPairButton = document.getElementById("lanPairButton") as HTMLButtonElement;
 const blePairButton = document.getElementById("blePairButton") as HTMLButtonElement;
 const pairStatus = document.getElementById("pairStatus") as HTMLParagraphElement;
@@ -133,13 +157,29 @@ const OUTCOME_MESSAGES: Record<string, string> = {
 };
 
 async function refreshStatus() {
-  const response = await chrome.runtime.sendMessage({ type: "IS_UNLOCKED" });
-  const paired = Boolean(response?.unlocked);
-  statusEl.textContent = paired ? "unlocked" : "not paired";
+    const response = await chrome.runtime.sendMessage({ type: "IS_UNLOCKED" });
+    const paired = Boolean(response?.unlocked);
+    
+    if (paired) {
+       const list = await ExtensionStorage.getDeviceList();
+       const selfId = await ExtensionStorage.getDeviceId();
+       const others = list.filter(d => d.deviceId !== selfId);
+       if (list.length > 0 && others.length === 0) {
+           await ExtensionStorage.wipeAll();
+           await chrome.runtime.sendMessage({ type: "LOCK_VAULT" });
+           window.location.reload();
+           return;
+       }
+    }
+
+    statusEl.textContent = paired ? "unlocked" : "not paired";
   lockedView.classList.toggle("hidden", paired);
   mainNav.classList.toggle("hidden", !paired);
   phoneSection.classList.toggle("hidden", !paired);
   pairNewDeviceSection.classList.toggle("hidden", !paired);
+    if (paired) {
+      showView("passwords");
+    }
 }
 
 type ViewName = "passwords" | "devices" | "import" | "recycleBin";
@@ -174,9 +214,9 @@ interface KnownDevice {
 
 async function renderDevices() {
   const [devices, selfId] = await Promise.all([ExtensionStorage.getDeviceList(), ExtensionStorage.getDeviceId()]);
-  const others = (devices as KnownDevice[]).filter((d) => d.deviceId !== selfId);
+  const others = (devices as KnownDevice[]).filter((d) => d.deviceId !== selfId && !d.revoked);
   devicesList.innerHTML = "";
-  devicesEmptyHint.classList.toggle("hidden", others.length > 0);
+  devicesEmptyHint.classList.toggle("hidden", others.length === 0);
   for (const d of others) {
     const li = document.createElement("li");
     li.style.display = "flex";
@@ -203,7 +243,7 @@ async function renderDevices() {
     meta.className = "device-meta";
     meta.textContent = `last synced ${new Date(d.lastSyncedAt).toLocaleString()}`;
     meta.style.fontSize = "12px";
-    meta.style.color = "var(--text-secondary)";
+    meta.style.color = "var(--text-muted)";
 
     info.append(name, meta);
     li.append(iconDiv, info);
@@ -428,10 +468,6 @@ async function renderRecycleBin() {
         dropdown.classList.remove("hidden");
       }
     });
-    
-    document.addEventListener("click", () => {
-      document.querySelectorAll(".kebab-dropdown").forEach((el) => el.classList.add("hidden"));
-    });
 
     const restoreButton = document.createElement("button");
     restoreButton.className = "kebab-dropdown-item";
@@ -445,7 +481,7 @@ async function renderRecycleBin() {
     });
 
     const eraseButton = document.createElement("button");
-    eraseButton.className = "kebab-dropdown-item text-red";
+    eraseButton.className = "kebab-dropdown-item danger erase-btn";
     eraseButton.textContent = "Erase permanently";
     eraseButton.addEventListener("click", async () => {
       dropdown.classList.add("hidden");
@@ -471,13 +507,40 @@ syncButton.addEventListener("click", async () => {
   if (!value) return;
   const [host, portStr] = value.split(":");
   const port = Number(portStr) || 51827;
-  syncStatus.textContent = "Syncing…";
-  const response = await chrome.runtime.sendMessage({ type: "SYNC_WITH_PHONE", host, port });
-  if (response?.ok) {
-    syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
-    await runSearch(searchInput.value);
-  } else {
-    syncStatus.textContent = `Sync failed: ${response?.error ?? "unknown error"}`;
+  let pulledCount = 0;
+  let pushedCount = 0;
+  
+  syncStatus.style.marginTop = "3px";
+  syncStatus.innerHTML = `<div style="display:flex; align-items:center; gap:8px;">
+    <div class="loader-circle"></div> 
+    <span id="syncProgressText">Syncing — Pulled: 0, Pushed: 0</span>
+  </div>`;
+  
+  const updateSyncUI = () => {
+    const txt = document.getElementById("syncProgressText");
+    if (txt) txt.textContent = `Syncing — Pulled: ${pulledCount}, Pushed: ${pushedCount}`;
+  };
+
+  const progressListener = (msg: any) => {
+    if (msg.type === "SYNC_PROGRESS") {
+      pulledCount = msg.pulled;
+      pushedCount = msg.pushed;
+      updateSyncUI();
+    }
+  };
+  chrome.runtime.onMessage.addListener(progressListener);
+  updateSyncUI();
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "SYNC_WITH_PHONE", host, port });
+    if (response?.ok) {
+      syncStatus.innerHTML = `<span style="color:var(--success-color);">✅ Synced — pulled ${response.pulled}, pushed ${response.pushed}</span>`;
+      await runSearch(searchInput.value);
+    } else {
+      syncStatus.textContent = `Sync failed: ${response?.error ?? "unknown error"}`;
+    }
+  } finally {
+    chrome.runtime.onMessage.removeListener(progressListener);
   }
 });
 
@@ -490,7 +553,30 @@ syncBleButton.addEventListener("click", async () => {
   }
   
   syncBleButton.disabled = true;
-  syncStatus.textContent = "Syncing...";
+  
+  let pulledCount = 0;
+  let pushedCount = 0;
+  
+  syncStatus.style.marginTop = "3px";
+  syncStatus.innerHTML = `<div style="display:flex; align-items:center; gap:8px;">
+    <div class="loader-circle"></div> 
+    <span id="syncBleProgressText">Syncing — Pulled: 0, Pushed: 0</span>
+  </div>`;
+  
+  const updateSyncUI = () => {
+    const txt = document.getElementById("syncBleProgressText");
+    if (txt) txt.textContent = `Syncing — Pulled: ${pulledCount}, Pushed: ${pushedCount}`;
+  };
+
+  const progressListener = (msg: any) => {
+    if (msg.type === "SYNC_PROGRESS") {
+      pulledCount = msg.pulled;
+      pushedCount = msg.pushed;
+      updateSyncUI();
+    }
+  };
+  chrome.runtime.onMessage.addListener(progressListener);
+  updateSyncUI();
   
   try {
     const rawKeyBytes = Uint8Array.from(atob(rawKeyBase64), (c) => c.charCodeAt(0));
@@ -498,7 +584,7 @@ syncBleButton.addEventListener("click", async () => {
     const vek = await unwrapVek(wrappedVek, deviceLocalKey);
 
     const response = await syncWithBlePhone(vek, false);
-    syncStatus.textContent = `Synced — pulled ${response.pulled}, pushed ${response.pushed}`;
+    syncStatus.innerHTML = `<span style="color:var(--success-color);">✅ Synced — pulled ${response.pulled}, pushed ${response.pushed}</span>`;
     await runSearch(searchInput.value);
   } catch(e) {
     const msg = (e as Error).message;
@@ -526,6 +612,8 @@ pairButton.addEventListener("click", async () => {
   const response = await chrome.runtime.sendMessage({ type: "COMPLETE_PAIRING", payload: value, deviceName: name });
   if (response.paired) {
     pairStatus.textContent = "Paired!";
+    authMethodSelect.value = "wifi";
+    await ExtensionStorage.saveAuthMethod("wifi");
     await refreshStatus();
   } else {
     pairStatus.textContent = `Pairing failed: ${response.error ?? "invalid code"}`;
@@ -574,6 +662,8 @@ lanPairButton.addEventListener("click", async () => {
     
     if (res?.paired) {
       pairStatus.textContent = "Paired successfully! Syncing devices...";
+      authMethodSelect.value = "wifi";
+      await ExtensionStorage.saveAuthMethod("wifi");
       await chrome.runtime.sendMessage({ type: "SYNC_WITH_PHONE", host, port });
       pairStatus.textContent = "Paired and synced successfully!";
       await refreshStatus();
@@ -616,7 +706,7 @@ blePairButton.addEventListener("click", async () => {
          }
       };
       chrome.runtime.onMessage.addListener(listener);
-      chrome.runtime.sendMessage({ type: "BLE_PAIR_DEVICE" }, (res) => {
+      chrome.runtime.sendMessage({ type: "BLE_PAIR_DEVICE", deviceName: name }, (res) => {
           if (!res?.ok && !isDone) {
              chrome.runtime.onMessage.removeListener(listener);
              reject(new Error("Failed to open pairing window"));
@@ -634,6 +724,8 @@ blePairButton.addEventListener("click", async () => {
     blePairButton.disabled = false;
     return;
   }
+  authMethodSelect.value = "bluetooth";
+  await ExtensionStorage.saveAuthMethod("bluetooth");
   pairStatus.textContent = "Paired and synced successfully!";
   await refreshStatus();
 });
@@ -677,10 +769,6 @@ copyPairingButton.addEventListener("click", async () => {
   setTimeout(() => (copyPairingButton.textContent = "Copy"), 1500);
 });
 
-refreshStatus();
-ExtensionStorage.getLastHost().then((host) => {
-  if (host) hostInput.value = host;
-});
 
 // ---------------------------------------------------------------------
 // Add new entry + password generator
@@ -870,7 +958,8 @@ importFileInput.addEventListener("change", async () => {
     
     const response = await chrome.runtime.sendMessage({
       type: "CAPTURE_CREDENTIAL",
-      domain: websiteName || domain,
+      websiteName: websiteName || domain,
+      websiteUrl: url,
       username,
       password,
     });
@@ -912,10 +1001,12 @@ if (urlParamsExt.get("mode") === "ble-pair") {
             
             // Strictly calling it inside this window context
             const outcome = await requestBlePairing(name, (pin) => {
-                status.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:32px;">${pin}</b>`;
+                status.innerHTML = `Connected! Verify this PIN on your phone: <br><b style="font-size:32px; color: green">${pin}</b>`;
                 btn.textContent = "Awaiting Phone...";
             }, true, (msg) => {
-                status.innerText = `[BLE Log]: ${msg}`;
+                if (!status.innerHTML.includes("Verify this PIN")) {
+                   status.innerText = `[BLE Log]: ${msg}`;
+                }
             }); // forcePrompt = true so it strictly runs requestDevice() inside pairing-client
 
             if (!outcome.success) {
@@ -1004,5 +1095,9 @@ authMethodSelect.addEventListener("change", async () => {
 // Sync initial values from storage
 ExtensionStorage.getLastHost().then((v) => { if (v) hostInput.value = v; });
 ExtensionStorage.getAuthMethod().then((v) => { if (v) authMethodSelect.value = v; });
+
+document.addEventListener("click", () => {
+  document.querySelectorAll(".kebab-dropdown").forEach((el) => el.classList.add("hidden"));
+});
 
 refreshStatus();

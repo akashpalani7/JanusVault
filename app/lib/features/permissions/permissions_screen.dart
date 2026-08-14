@@ -124,13 +124,15 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
   void _continue({bool autoSkip = false}) {
     if (!autoSkip && !mounted) return;
     
-    // addPostFrameCallback ensures we don't conflict with active build phases on startup
     if (mounted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const MainScreen()),
-        );
-      });
+      void route() => Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const MainScreen()),
+          );
+      if (autoSkip) {
+        route();
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) => route());
+      }
     }
   }
 
