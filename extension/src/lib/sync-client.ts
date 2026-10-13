@@ -37,14 +37,44 @@ export interface SyncTransport {
 export async function syncWithPhone(host: string, port: number, vek: CryptoKey): Promise<{ pulled: number; pushed: number; rotated?: boolean }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://${host}:${port}`);
+    const earlyQueue: string[] = [];
+    let messageHandler: ((message: string) => void) | null = null;
+
+    socket.onmessage = (event) => {
+      if (messageHandler) {
+        messageHandler(event.data);
+      } else {
+        console.log(`[Ext/Sync] Buffering early WebSocket message: ${String(event.data).substring(0, 50)}...`);
+        earlyQueue.push(event.data);
+      }
+    };
+
     const transport: SyncTransport = {
-      send: async (msg) => { socket.send(msg); return Promise.resolve(); },
-      close: () => socket.close(),
-      onMessage: null,
+      send: async (msg) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(msg);
+        }
+        return Promise.resolve();
+      },
+      close: () => {
+        try { socket.close(); } catch {}
+      },
+      get onMessage() {
+        return messageHandler;
+      },
+      set onMessage(fn: ((message: string) => void) | null) {
+        messageHandler = fn;
+        if (fn && earlyQueue.length > 0) {
+          console.log(`[Ext/Sync] Flushing ${earlyQueue.length} buffered early messages...`);
+          while (earlyQueue.length > 0) {
+            const early = earlyQueue.shift()!;
+            fn(early);
+          }
+        }
+      },
       onError: null,
     };
 
-    socket.onmessage = (event) => transport.onMessage?.(event.data);
     socket.onerror = () => {
       console.error(`Sync socket error: Could not connect to ${host}:${port}`);
       const err = new Error(`Could not connect to ${host}:${port}`);
@@ -112,7 +142,7 @@ export async function runSyncProtocol(
     await transport.send(JSON.stringify({ type: "metadata", payload: { entries: metadata } } satisfies SyncMessage));
   };
 
-  transport.onMessage = async (rawJson: string) => {
+  const handleIncomingMessage = async (rawJson: string) => {
     const message = JSON.parse(rawJson) as SyncMessage;
     console.log(`Sync transport: Received message type '${message.type}'`);
     try {
@@ -145,9 +175,11 @@ export async function runSyncProtocol(
           const uuids = message.payload.uuids as string[];
           const mine = await ExtensionStorage.getAllEntries();
           const requested = mine.filter((e) => uuids.includes(e.uuid));
-          for (const req of requested) {
-            await transport.send(JSON.stringify({ type: "records", payload: { entries: [req] } } satisfies SyncMessage));
-            pushed += 1;
+          const chunkSize = 25;
+          for (let i = 0; i < requested.length; i += chunkSize) {
+            const chunk = requested.slice(i, i + chunkSize);
+            await transport.send(JSON.stringify({ type: "records", payload: { entries: chunk } } satisfies SyncMessage));
+            pushed += chunk.length;
             chrome.runtime.sendMessage({ type: "SYNC_PROGRESS", pulled, pushed }).catch(() => {});
           }
           break;
@@ -283,14 +315,22 @@ export async function runSyncProtocol(
       } else {
         resolve({ pulled, pushed, rotated: hasRotated });
       }
-    }, 8000);
+    }, 15000);
   };
   
-  // Wrap incoming onMessage to also reset timer
-  const originalOnMessage = transport.onMessage;
+  // Wrap incoming onMessage to execute sequentially via a Promise queue and reset timer
+  let messageQueue: Promise<void> = Promise.resolve();
   transport.onMessage = (msg) => {
     resetQuietTimer();
-    return originalOnMessage?.(msg);
+    messageQueue = messageQueue
+      .then(async () => {
+        await handleIncomingMessage(msg);
+      })
+      .catch((err) => {
+        console.error("Sync transport error processing message:", err);
+        transport.close();
+        reject(err);
+      });
   };
   transport.onActivity = () => {
     resetQuietTimer();

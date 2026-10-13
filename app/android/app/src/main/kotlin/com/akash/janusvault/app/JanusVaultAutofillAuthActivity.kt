@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.content.Intent
 import android.os.Bundle
@@ -168,9 +168,9 @@ class JanusVaultAutofillAuthActivity : FragmentActivity() {
         if (validEntries.isEmpty()) {
             android.util.Log.w("JanusVault", "Auth: no matching entry with password found, returning Generate Password dataset")
             
-            val suggestPresentation = android.widget.RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
-                setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
-                setTextViewText(com.example.janusvault.R.id.subtitle, "JanusVault Generator")
+            val suggestPresentation = android.widget.RemoteViews(packageName, com.akash.janusvault.R.layout.autofill_remote_view).apply {
+                setTextViewText(com.akash.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
+                setTextViewText(com.akash.janusvault.R.id.subtitle, "JanusVault Generator")
             }
 
             val genIntent = Intent(applicationContext, JanusVaultAutofillGeneratorActivity::class.java).apply {

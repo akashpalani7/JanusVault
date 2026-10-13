@@ -67,14 +67,22 @@ class BackupService {
         (json['recoveryKits'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>().map(RecoveryKitRecord.fromJson).toList();
 
     if (mode == RestoreMode.replace) {
+      final selfId = _db.settings?.selfDeviceId;
+      final currentSelfRecord = selfId != null ? _db.findDeviceById(selfId) : null;
+
       await _db.clearEntries();
       await _db.clearDevices();
       await _db.clearKits();
+
       for (final e in incomingEntries) {
         await _db.upsertEntry(e);
       }
       for (final d in incomingDevices) {
+        if (selfId != null && d.deviceId == selfId) continue;
         await _db.upsertDevice(d);
+      }
+      if (currentSelfRecord != null) {
+        await _db.upsertDevice(currentSelfRecord);
       }
       for (final k in incomingKits) {
         await _db.upsertKit(k);

@@ -43,13 +43,83 @@ function isVisible(el: HTMLElement): boolean {
   return true;
 }
 
+const USERNAME_KEYWORDS = new Set([
+  "username", "user_name", "userid", "user_id", "userlogin",
+  "email", "emailaddress", "email_address",
+  "login", "loginid", "login_id", "login_name",
+  "account", "accountid", "account_name",
+  "phone", "phonenumber", "phone_number", "mobile",
+  "identifier", "credential"
+]);
+
+const PASSWORD_KEYWORDS = new Set([
+  "password", "passwd", "pass_word", "passcode",
+  "pwd", "pin", "secret", "passphrase",
+  "current_password", "new_password", "confirm_password",
+  "currentpassword", "newpassword", "confirmpassword"
+]);
+
+const HTML_USERNAME_AUTOCOMPLETE = new Set(["username", "email", "tel"]);
+const HTML_PASSWORD_AUTOCOMPLETE = new Set(["current-password", "new-password", "password"]);
+
+const EXCLUDED_KEYWORDS = new Set([
+  "message", "chat", "compose", "comment",
+  "search", "query", "caption", "bio",
+  "description", "note", "post", "reply",
+  "dm", "direct", "story", "status",
+  "tweet", "send", "write",
+  "share", "forward", "freeform"
+]);
+
+function tokenize(input: string): Set<string> {
+  return new Set(
+    input
+      .toLowerCase()
+      .replace(/([a-z])([A-Z])/g, "$1_$2")
+      .split(/[_.\-\s]+/)
+      .filter((t) => t.length > 0)
+  );
+}
+
+function matchesKeywords(text: string, keywords: Set<string>): boolean {
+  if (!text.trim()) return false;
+  const rawText = text.toLowerCase();
+  const normalized = rawText.replace(/[^a-z0-9]/g, "");
+  for (const kw of keywords) {
+    if (normalized === kw.replace(/_/g, "")) return true;
+  }
+  const tokens = tokenize(rawText);
+  for (const kw of keywords) {
+    const kwTokens = Array.from(tokenize(kw));
+    if (kwTokens.every((kt) => tokens.has(kt))) return true;
+  }
+  return false;
+}
+
+function isExcludedContext(text: string): boolean {
+  if (!text.trim()) return false;
+  const tokens = tokenize(text);
+  for (const kw of EXCLUDED_KEYWORDS) {
+    if (tokens.has(kw)) return true;
+  }
+  return false;
+}
+
 function findCandidateFields(root: ParentNode = document): FoundField[] {
   const found: FoundField[] = [];
   const inputs = queryAllInputs(root as Element);
   
   let firstPasswordIndex = -1;
   inputs.forEach((input, index) => {
-    if (input.type === "password" && !input.hidden && isVisible(input)) {
+    if (input.hidden || !isVisible(input)) return;
+    const hints = `${input.autocomplete} ${input.name} ${input.id} ${input.placeholder}`.toLowerCase();
+    if (isExcludedContext(hints)) return;
+
+    const isPasswordType = input.type === "password";
+    const isPasswordAutocomplete = Array.from(HTML_PASSWORD_AUTOCOMPLETE).some(a => (input.autocomplete || "").toLowerCase().includes(a));
+    const isPasswordMatch = isPasswordType || isPasswordAutocomplete || matchesKeywords(hints, PASSWORD_KEYWORDS);
+
+    if (isPasswordMatch) {
       found.push({ input, kind: "password" });
       if (firstPasswordIndex === -1) firstPasswordIndex = index;
     }
@@ -59,10 +129,14 @@ function findCandidateFields(root: ParentNode = document): FoundField[] {
     if (input.type === "password" || input.hidden || !isVisible(input)) {
       return;
     }
-    
+    const hints = `${input.autocomplete} ${input.name} ${input.id} ${input.placeholder} ${input.type}`.toLowerCase();
+    if (isExcludedContext(hints)) return;
+
     if (input.type === "email" || input.type === "text" || input.type === "tel" || !input.hasAttribute("type")) {
-      const hints = `${input.autocomplete} ${input.name} ${input.id} ${input.placeholder} ${input.type}`.toLowerCase();
-      if (hints.includes("user") || hints.includes("email") || hints.includes("login") || hints.includes("id") || hints.includes("account") || hints.includes("phone")) {
+      const autocomplete = (input.autocomplete || "").toLowerCase();
+      const isHtmlUsername = Array.from(HTML_USERNAME_AUTOCOMPLETE).some(a => autocomplete.includes(a));
+
+      if (isHtmlUsername || matchesKeywords(hints, USERNAME_KEYWORDS)) {
         found.push({ input, kind: "username" });
       } else if (firstPasswordIndex !== -1 && index === firstPasswordIndex - 1) {
         // Fallback: If it's the text input immediately preceding the first password input, it's likely the username.

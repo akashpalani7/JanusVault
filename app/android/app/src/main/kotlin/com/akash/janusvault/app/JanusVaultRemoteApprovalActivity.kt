@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.os.Bundle
 import androidx.biometric.BiometricPrompt
@@ -27,14 +27,14 @@ class JanusVaultRemoteApprovalActivity : FragmentActivity() {
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 AutofillBridge.resolveApproval(true)
-                com.example.janusvault.MainActivity.resolveApproval(true)
+                com.akash.janusvault.MainActivity.resolveApproval(true)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 AutofillBridge.resolveApproval(false)
-                com.example.janusvault.MainActivity.resolveApproval(false)
+                com.akash.janusvault.MainActivity.resolveApproval(false)
                 ApprovalNotifier.dismiss(applicationContext)
                 finish()
             }

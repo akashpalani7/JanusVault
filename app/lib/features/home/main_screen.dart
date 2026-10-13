@@ -24,6 +24,7 @@ class MainScreen extends ConsumerStatefulWidget {
 
 class _MainScreenState extends ConsumerState<MainScreen> with SingleTickerProviderStateMixin {
   int _currentIndex = 0;
+  bool _isMoreOpen = false;
   bool _isLockedHover = false;
   late final TabController _syncTabController;
 
@@ -290,26 +291,25 @@ class _MainScreenState extends ConsumerState<MainScreen> with SingleTickerProvid
     return Scaffold(
       appBar: _buildAppBar(),
       body: IndexedStack(
-        index: _currentIndex > 2 ? 0 : _currentIndex,
+        index: _currentIndex,
         children: [
           const VaultListScreen(),
           SyncScreen(controller: _syncTabController),
           const DevicesScreen(),
         ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _currentIndex,
-          onDestinationSelected: (index) {
-            if (index == 3) {
-              final previousIndex = _currentIndex;
-              setState(() => _currentIndex = index);
-              _showMoreMenu().whenComplete(() {
-                if (mounted) setState(() => _currentIndex = previousIndex);
-              });
-            } else {
-              setState(() => _currentIndex = index);
-            }
-          },
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _isMoreOpen ? 3 : _currentIndex,
+        onDestinationSelected: (index) {
+          if (index == 3) {
+            setState(() => _isMoreOpen = true);
+            _showMoreMenu().whenComplete(() {
+              if (mounted) setState(() => _isMoreOpen = false);
+            });
+          } else {
+            setState(() => _currentIndex = index);
+          }
+        },
           destinations: const [
             NavigationDestination(icon: Icon(Icons.lock_outline), selectedIcon: Icon(Icons.lock), label: 'Vault'),
             NavigationDestination(icon: Icon(Icons.sync), selectedIcon: Icon(Icons.sync), label: 'Sync'),

@@ -29,27 +29,27 @@ import 'core/vault/vault_session.dart';
 const MethodChannel _channel = MethodChannel('com.janusvault.app/autofill');
 
 void setupAutofillEntryPoint() {
-  print('==== autofillMain STARTED ====');
+  debugPrint('==== autofillMain STARTED ====');
   WidgetsFlutterBinding.ensureInitialized();
-  print('==== WidgetsFlutterBinding initialized ====');
+  debugPrint('==== WidgetsFlutterBinding initialized ====');
   _channel.setMethodCallHandler(_handleCall);
   _initializeThenSignalReady();
 }
 
 Future<void> _initializeThenSignalReady() async {
-  print('==== _initializeThenSignalReady STARTED ====');
+  debugPrint('==== _initializeThenSignalReady STARTED ====');
   try {
     await VaultDatabase.instance.load();
-    print('Autofill isolate: VaultDatabase loaded');
+    debugPrint('Autofill isolate: VaultDatabase loaded');
   } catch (e, stack) {
-    print('Autofill isolate: VaultDatabase failed to load - $e\n$stack');
+    debugPrint('Autofill isolate: VaultDatabase failed to load - $e\n$stack');
   }
-  print('==== sending ready to channel ====');
+  debugPrint('==== sending ready to channel ====');
   try {
     await _channel.invokeMethod('ready');
-    print('==== ready sent ====');
+    debugPrint('==== ready sent ====');
   } catch (e, stack) {
-    print('==== failed to send ready - $e\n$stack ====');
+    debugPrint('==== failed to send ready - $e\n$stack ====');
   }
 }
 
@@ -111,10 +111,12 @@ Future<String> _searchEntries(Map<dynamic, dynamic> args) async {
     if (queryDomain.isEmpty) return false;
 
     // Exact domain match or suffix match (e.g. "github.com" matches "www.github.com")
-    if (storedDomain == queryDomain || storedDomain.endsWith('.$queryDomain'))
+    if (storedDomain == queryDomain || storedDomain.endsWith('.$queryDomain')) {
       return true;
-    if (queryDomain == storedDomain || queryDomain.endsWith('.$storedDomain'))
+    }
+    if (queryDomain == storedDomain || queryDomain.endsWith('.$storedDomain')) {
       return true;
+    }
 
     // Fallback: keyword containment for package names or partial matches
     if (name.contains(queryDomain) || url.contains(queryDomain)) return true;
@@ -210,7 +212,7 @@ Timer? _syncShutdownTimer;
 Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
   _syncShutdownTimer?.cancel();
   _syncShutdownTimer = Timer(const Duration(minutes: 2), () {
-    print('BLE Listener timed out after 2 minutes. Auto-stopping.');
+    debugPrint('BLE Listener timed out after 2 minutes. Auto-stopping.');
     _stopSyncListening();
   });
 
@@ -247,7 +249,7 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
     await LanSyncService.instance
         .startAdvertisingAndServing(deviceDisplayName: displayName);
   } catch (e) {
-    print('LanSync autofill start failed: $e');
+    debugPrint('LanSync autofill start failed: $e');
   }
 
   if (bluetoothEnabled) {
@@ -255,10 +257,10 @@ Future<void> _startSyncListening(Map<dynamic, dynamic> args) async {
       await BleGattService.instance
           .startAdvertising(deviceDisplayName: displayName);
     } catch (e) {
-      print('Ble autofill start failed: $e');
+      debugPrint('Ble autofill start failed: $e');
     }
   } else {
-    print('Bluetooth is off. Skipping BleGattService to prevent intrusive OS dialogs.');
+    debugPrint('Bluetooth is off. Skipping BleGattService to prevent intrusive OS dialogs.');
   }
 }
 

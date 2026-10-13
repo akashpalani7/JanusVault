@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -36,7 +36,7 @@ class JanusVaultSyncForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID = "janusvault_listening"
         private const val NOTIFICATION_ID = 4243
-        const val ACTION_STOP = "com.example.janusvault.app.ACTION_STOP_LISTENING"
+        const val ACTION_STOP = "com.akash.janusvault.app.ACTION_STOP_LISTENING"
 
         private const val PREFS = "janusvault_tile_prefs"
         private const val KEY_BT_WAS_OFF = "bt_turned_on_by_us"

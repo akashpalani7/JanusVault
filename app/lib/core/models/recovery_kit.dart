@@ -37,7 +37,7 @@ class RecoveryKitPackage {
 
   const RecoveryKitPackage({required this.kitId, required this.saltBase64, required this.wrappedVekBase64});
 
-  /// "janusvault-recovery:v1:<kitId>:<salt>:<wrappedVek>" — same style as
+  /// `"janusvault-recovery:v1:<kitId>:<salt>:<wrappedVek>"` — same style as
   /// PairingPackage.encode(), suitable for a QR code or manual export.
   String encode() => 'janusvault-recovery:v1:$kitId:$saltBase64:$wrappedVekBase64';
 

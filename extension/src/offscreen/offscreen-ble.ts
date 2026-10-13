@@ -297,6 +297,9 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
                     }
                 };
 
+                const earlyBleBuffer: string[] = [];
+                let bleMessageHandler: ((msg: string) => void) | null = null;
+
                 const transport: SyncTransport = {
                     send: (msg) => {
                         return new Promise((res, rej) => {
@@ -304,11 +307,16 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
                                 try {
                                     const encoder = new TextEncoder();
                                     const bytes = encoder.encode(msg + EOM_MARKER);
-                                    const chunkSize = 480;
+                                    const chunkSize = 128; // Safe chunk size compatible with all BLE MTU limits
                                     for (let i = 0; i < bytes.length; i += chunkSize) {
                                         const end = Math.min(i + chunkSize, bytes.length);
                                         const chunk = bytes.slice(i, end);
-                                        await char.writeValue(chunk);
+                                        if (typeof (char as any).writeValueWithResponse === 'function') {
+                                            await (char as any).writeValueWithResponse(chunk);
+                                        } else {
+                                            await char.writeValue(chunk);
+                                        }
+                                        await new Promise(r => setTimeout(r, 20));
                                     }
                                     res();
                                 } catch (e) {
@@ -322,7 +330,18 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
                         closing = true;
                         if (device.gatt?.connected) device.gatt.disconnect();
                     },
-                    onMessage: null,
+                    get onMessage() {
+                        return bleMessageHandler;
+                    },
+                    set onMessage(fn: ((msg: string) => void) | null) {
+                        bleMessageHandler = fn;
+                        if (fn && earlyBleBuffer.length > 0) {
+                            console.log(`[Ext/BLE] Flushing ${earlyBleBuffer.length} early BLE messages...`);
+                            while (earlyBleBuffer.length > 0) {
+                                fn(earlyBleBuffer.shift()!);
+                            }
+                        }
+                    },
                     onError: null,
                 };
 
@@ -336,7 +355,11 @@ async function executeBleSync(vekRaw: number[], forcePrompt: boolean): Promise<{
                         const eomIdx = inboundBuffer.indexOf(EOM_MARKER);
                         const fullMessage = inboundBuffer.substring(0, eomIdx);
                         inboundBuffer = inboundBuffer.substring(eomIdx + 1);
-                        transport.onMessage?.(fullMessage);
+                        if (bleMessageHandler) {
+                            bleMessageHandler(fullMessage);
+                        } else {
+                            earlyBleBuffer.push(fullMessage);
+                        }
                     }
                 };
 

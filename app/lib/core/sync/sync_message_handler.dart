@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart';
 
 import '../crypto/crypto_engine.dart';
 import '../devices/device_manager.dart';
@@ -33,6 +34,7 @@ class SyncConnectionHandler {
   final void Function()? onRecordsUpdated;
 
   String? _sentNonceBase64;
+  String? peerDeviceId;
   bool authenticated = false;
   bool awaitingRecordsReply = false;
   final Completer<bool> _authCompleter = Completer<bool>();
@@ -58,14 +60,19 @@ class SyncConnectionHandler {
     _challengeSent = true;
     final nonce = _randomBytes(16);
     _sentNonceBase64 = base64Encode(nonce);
+    debugPrint('SyncMessageHandler: Sending hello challenge with nonce: $_sentNonceBase64');
     transport.send(SyncMessage(SyncMsgType.hello, {'nonce': _sentNonceBase64}).encode());
   }
 
   Future<void> respondToChallenge(String theirNonceBase64) async {
     final v = vek;
-    if (v == null) return;
+    if (v == null) {
+      debugPrint('SyncMessageHandler: Cannot respond to challenge - VEK is null!');
+      return;
+    }
     final authKey = await CryptoEngine.instance.deriveSyncAuthKey(v);
     final mac = await CryptoEngine.instance.hmacSha256(authKey, theirNonceBase64);
+    debugPrint('SyncMessageHandler: Sending helloResponse');
     transport.send(SyncMessage(SyncMsgType.helloResponse, {'mac': base64Encode(mac)}).encode());
   }
 
@@ -73,6 +80,7 @@ class SyncConnectionHandler {
     final v = vek;
     final sentNonce = _sentNonceBase64;
     if (v == null || sentNonce == null) {
+      debugPrint('SyncMessageHandler: receiveChallengeResponse failed - v=$v, sentNonce=$sentNonce');
       _fail();
       return;
     }
@@ -80,6 +88,7 @@ class SyncConnectionHandler {
     final expectedMac = await CryptoEngine.instance.hmacSha256(authKey, sentNonce);
     final actualMac = base64Decode(macBase64);
     var valid = expectedMac.length == actualMac.length && _constantTimeEquals(expectedMac, actualMac);
+    debugPrint('SyncMessageHandler: receiveChallengeResponse verification result: valid=$valid');
     
     if (!valid && _db.settings?.queuedRotationOldSyncAuthKeyBase64 != null) {
       final oldKeyBytes = base64Decode(_db.settings!.queuedRotationOldSyncAuthKeyBase64!);
@@ -87,6 +96,7 @@ class SyncConnectionHandler {
       final expectedMacOld = await CryptoEngine.instance.hmacSha256(oldAuthKey, sentNonce);
       if (expectedMacOld.length == actualMac.length && _constantTimeEquals(expectedMacOld, actualMac)) {
         valid = true;
+        debugPrint('SyncMessageHandler: Authenticated via queued old rotation key');
         // Peer authenticated but has the old key. Queue the rotation message immediately.
         transport.send(SyncMessage(SyncMsgType.vekRotation, {
           'wrappedNewVek': _db.settings!.queuedRotationWrappedNewVekBase64,
@@ -98,7 +108,10 @@ class SyncConnectionHandler {
     
     authenticated = valid;
     if (!_authCompleter.isCompleted) _authCompleter.complete(valid);
-    if (!valid) _fail();
+    if (!valid) {
+      debugPrint('SyncMessageHandler: Authentication failed - closing transport');
+      _fail();
+    }
   }
 
   void _fail() {
@@ -154,11 +167,17 @@ class SyncConnectionHandler {
             .toList();
         final mine = localMetadata();
         final diff = SyncDiff.compute(mine: mine, theirs: theirs);
+        debugPrint('SyncMessageHandler: Metadata diff - mine=${mine.length}, theirs=${theirs.length}, toSend=${diff.uuidsToSendToPeer.length}, toRequest=${diff.uuidsToRequestFromPeer.length}');
 
         if (diff.uuidsToSendToPeer.isNotEmpty) {
           final records = _wireRecordsFor(diff.uuidsToSendToPeer);
-          for (final record in records) {
-            transport.send(SyncMessage(SyncMsgType.records, {'entries': [record.toJson()]}).encode());
+          const chunkSize = 25;
+          for (var i = 0; i < records.length; i += chunkSize) {
+            final end = (i + chunkSize < records.length) ? i + chunkSize : records.length;
+            final chunk = records.sublist(i, end);
+            transport.send(SyncMessage(SyncMsgType.records, {'entries': chunk.map((r) => r.toJson()).toList()}).encode());
+            // Yield slightly between chunks so WebSocket buffer drains cleanly
+            await Future.delayed(const Duration(milliseconds: 25));
           }
         }
         if (diff.uuidsToRequestFromPeer.isNotEmpty) {
@@ -166,6 +185,9 @@ class SyncConnectionHandler {
           transport.send(SyncMessage(SyncMsgType.request, {'uuids': diff.uuidsToRequestFromPeer}).encode());
         } else {
           transport.send(SyncMessage(SyncMsgType.done, {}).encode());
+          debugPrint('SyncMessageHandler: Sent done message to peer');
+          // Allow client 8 seconds to receive records and close, then fallback close
+          await Future.delayed(const Duration(seconds: 8));
           await transport.close();
         }
         break;
@@ -175,8 +197,13 @@ class SyncConnectionHandler {
         if (rawUuids == null) break;
         final uuids = rawUuids.cast<String>();
         final records = _wireRecordsFor(uuids);
-        for (final record in records) {
-          transport.send(SyncMessage(SyncMsgType.records, {'entries': [record.toJson()]}).encode());
+        debugPrint('SyncMessageHandler: Peer requested ${uuids.length} records, found ${records.length}');
+        const chunkSize = 25;
+        for (var i = 0; i < records.length; i += chunkSize) {
+          final end = (i + chunkSize < records.length) ? i + chunkSize : records.length;
+          final chunk = records.sublist(i, end);
+          transport.send(SyncMessage(SyncMsgType.records, {'entries': chunk.map((r) => r.toJson()).toList()}).encode());
+          await Future.delayed(const Duration(milliseconds: 25));
         }
         break;
 
@@ -184,10 +211,13 @@ class SyncConnectionHandler {
         final rawEntries = message.payload['entries'] as List?;
         if (rawEntries == null) break;
         final entries = rawEntries.map((e) => WireRecord.fromJson(e as Map<String, dynamic>));
+        debugPrint('SyncMessageHandler: Received ${rawEntries.length} records from peer');
         await _applyIncomingRecords(entries.toList());
         if (awaitingRecordsReply) {
           awaitingRecordsReply = false;
           transport.send(SyncMessage(SyncMsgType.done, {}).encode());
+          debugPrint('SyncMessageHandler: Sent done message to peer after applying records');
+          await Future.delayed(const Duration(seconds: 8));
           await transport.close();
         }
         break;
@@ -200,6 +230,7 @@ class SyncConnectionHandler {
             .toList();
             
         final peerId = infos.first.deviceId;
+        peerDeviceId = peerId;
         final existingPeer = _db.findDeviceById(peerId);
         if (existingPeer != null && existingPeer.revoked) {
           transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
@@ -223,13 +254,18 @@ class SyncConnectionHandler {
         if (requestId == null) break;
         
         final deviceId = message.payload['deviceId'] as String?;
-        if (deviceId != null) {
-          final existingPeer = _db.findDeviceById(deviceId);
-          if (existingPeer != null && existingPeer.revoked) {
-            transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
-            await transport.close();
-            return;
-          }
+        if (deviceId == null || deviceId.isEmpty) {
+          transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (missing deviceId).'}).encode());
+          await transport.close();
+          return;
+        }
+        peerDeviceId = deviceId;
+
+        final existingPeer = _db.findDeviceById(deviceId);
+        if (existingPeer != null && existingPeer.revoked) {
+          transport.send(SyncMessage(SyncMsgType.error, {'message': 'Device connection rejected (revoked).'}).encode());
+          await transport.close();
+          return;
         }
 
         final actionLabel = message.payload['actionLabel'] as String? ?? 'access a saved password';

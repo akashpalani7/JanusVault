@@ -158,26 +158,26 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                   );
                                   if (confirm == true) {
                                     await deviceManager.revokeDevice(d.deviceId);
-                                    if (mounted) {
+                                    if (context.mounted) {
                                       final rotate = await showDialog<bool>(
                                         context: context,
                                         barrierDismissible: false,
                                         builder: (c) => AlertDialog(
-                                          title: const Text('Rotate vault key?'),
+                                          title: const Text('Rotate Vault Key (Recommended)'),
                                           content: Text(
-                                              'If you suspect "${d.displayName}" was stolen or compromised, you must rotate your encryption key to prevent it from decrypting new data.\n\n'
-                                              'This requires re-encrypting your entire vault. Do not close the app.'),
+                                              'To ensure "${d.displayName}" cannot decrypt any future passwords, rotating your vault key is recommended and enabled by default.\n\n'
+                                              'This re-encrypts your entire vault under a new master key. Do not close the app.'),
                                           actions: [
-                                            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Skip')),
+                                            TextButton(onPressed: () => Navigator.of(c).pop(false), child: const Text('Skip (Not Recommended)')),
                                             FilledButton(
                                               style: FilledButton.styleFrom(backgroundColor: Colors.red),
                                               onPressed: () => Navigator.of(c).pop(true), 
-                                              child: const Text('Rotate Key'),
+                                              child: const Text('Rotate Key Now'),
                                             ),
                                           ],
                                         ),
                                       );
-                                      if (rotate == true) {
+                                      if (rotate != false && context.mounted) {
                                         showDialog(
                                           context: context,
                                           barrierDismissible: false,
@@ -196,7 +196,7 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
                                           final newVek = await ref.read(deviceManagerProvider).rotateVek(selfDeviceId: selfId);
                                           await ref.read(vaultRepositoryProvider).reencryptAllWithNewVek(newVek);
                                         } finally {
-                                          if (mounted) Navigator.of(context).pop(); // dismiss progress
+                                          if (context.mounted) Navigator.of(context).pop(); // dismiss progress
                                         }
                                       }
                                     }

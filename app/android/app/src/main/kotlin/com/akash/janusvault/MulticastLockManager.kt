@@ -1,4 +1,4 @@
-package com.example.janusvault
+package com.akash.janusvault
 
 import android.content.Context
 import android.net.wifi.WifiManager

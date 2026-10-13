@@ -96,16 +96,21 @@ async function getVek(): Promise<CryptoKey | null> {
 async function decryptRecord(record: EncryptedEntryRecord) {
   const vek = await getVek();
   if (!vek) return null;
-  return {
-    uuid: record.uuid,
-    websiteName: await decryptString(record.encryptedWebsiteName, vek),
-    websiteUrl: await decryptString(record.encryptedWebsiteUrl, vek),
-    username: await decryptString(record.encryptedUsername, vek),
-    password: await decryptString(record.encryptedPassword, vek),
-    createdAt: record.createdAt,
-    lastUpdated: record.lastUpdated,
-    deleted: record.deleted,
-  };
+  try {
+    return {
+      uuid: record.uuid,
+      websiteName: await decryptString(record.encryptedWebsiteName, vek),
+      websiteUrl: await decryptString(record.encryptedWebsiteUrl, vek),
+      username: await decryptString(record.encryptedUsername, vek),
+      password: await decryptString(record.encryptedPassword, vek),
+      createdAt: record.createdAt,
+      lastUpdated: record.lastUpdated,
+      deleted: record.deleted,
+    };
+  } catch (err) {
+    console.warn(`[Ext/Worker] Failed to decrypt record ${record.uuid}:`, err);
+    return null;
+  }
 }
 
 type ApprovalOutcome = "approved" | "denied" | "unreachable" | "timeout" | "no_phone_configured";
@@ -129,7 +134,7 @@ async function setupOffscreenDocument(): Promise<void> {
   try {
     await (chrome as any).offscreen.createDocument({
       url: 'offscreen/offscreen-ble.html',
-      reasons: ['DOM_PARSER'],
+      reasons: ['BLUETOOTH'],
       justification: 'Required for background Bluetooth GATT communication'
     });
   } catch (e) {
@@ -267,25 +272,49 @@ async function listEntryMeta(query?: string) {
   return { locked: false, entries: results };
 }
 
+function extractDomain(urlOrHostname: string): string {
+  try {
+    let raw = urlOrHostname.trim().toLowerCase();
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      raw = new URL(raw).hostname;
+    } else {
+      raw = raw.split("/")[0].split(":")[0];
+    }
+    return raw.replace(/^www\./, "");
+  } catch {
+    return urlOrHostname.trim().toLowerCase().replace(/^www\./, "");
+  }
+}
+
+function isDomainMatch(pageDomain: string, entryUrl: string, entryName: string): boolean {
+  const normPage = extractDomain(pageDomain);
+  const normUrl = extractDomain(entryUrl);
+  const normName = extractDomain(entryName);
+
+  if (normUrl) {
+    if (normPage === normUrl) return true;
+    if (normPage.endsWith("." + normUrl) || normUrl.endsWith("." + normPage)) return true;
+  }
+  if (normName) {
+    if (normPage === normName) return true;
+    if (normPage.endsWith("." + normName) || normName.endsWith("." + normPage)) return true;
+  }
+  return false;
+}
+
 /** Metadata-only matches for a page domain, backing the on-page chip. */
 async function findMatchesForDomain(domain: string) {
   const vek = await getVek();
   if (!vek) return { locked: true, entries: [] as unknown[] };
 
   const all = await ExtensionStorage.getAllEntries();
-  const normalizedDomain = domain.replace(/^www\./, "").toLowerCase();
-  const genericTlds = new Set(["com", "org", "net", "io", "co", "uk", "in", "app", "dev"]);
-  const domainTokens = normalizedDomain.split(".").filter(t => t.length > 2 && !genericTlds.has(t));
-  
   const matches: unknown[] = [];
   for (const record of all) {
     if (record.deleted) continue;
     const decrypted = await decryptRecord(record);
     if (!decrypted) continue;
-    const haystack = `${decrypted.websiteName} ${decrypted.websiteUrl}`.toLowerCase();
     
-    if (haystack.includes(normalizedDomain) || 
-        domainTokens.some(t => haystack.includes(t))) {
+    if (isDomainMatch(domain, decrypted.websiteUrl, decrypted.websiteName)) {
       matches.push({ uuid: decrypted.uuid, websiteName: decrypted.websiteName, username: decrypted.username });
     }
   }
@@ -542,7 +571,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
  * exactly (same salt/info in deriveKeyFromPairingCode, same wire format).
  */
 async function completePairing(rawPairingPackage: string, deviceName?: string) {
-  const { pairingCodePrintable, wrappedVekForTransitBase64 } = parsePairingPackage(rawPairingPackage);
+  const { pairingCodePrintable, wrappedVekForTransitBase64, deviceId: packageDeviceId } = parsePairingPackage(rawPairingPackage);
   const codeBytes = decodePairingCode(pairingCodePrintable);
   const pairingKey = await deriveKeyFromPairingCode(codeBytes);
 
@@ -559,6 +588,14 @@ async function completePairing(rawPairingPackage: string, deviceName?: string) {
   const wrappedForStorage = await wrapVek(vek, deviceLocalKey);
 
   const now = new Date().toISOString();
+  let deviceId = await ExtensionStorage.getDeviceId();
+  if (!deviceId) {
+    deviceId = packageDeviceId || `ext_${Date.now()}`;
+    await ExtensionStorage.saveDeviceId(deviceId);
+  } else if (packageDeviceId) {
+    deviceId = packageDeviceId;
+    await ExtensionStorage.saveDeviceId(deviceId);
+  }
   await ExtensionStorage.saveDeviceLocalKeyRaw(rawLocalKeyBase64);
   await ExtensionStorage.saveWrappedVek(wrappedForStorage);
   await ExtensionStorage.savePairedAt(now);
@@ -566,7 +603,7 @@ async function completePairing(rawPairingPackage: string, deviceName?: string) {
   if (deviceName?.trim()) await ExtensionStorage.saveDisplayName(deviceName.trim());
   cachedVek = vek; // available immediately, no need to wait for a worker restart
 
-  return { paired: true };
+  return { paired: true, deviceId };
 }
 
 async function completeLanPairing(wrappedVekBase64: string, sharedSecretArray: number[], deviceName?: string, peerDevice?: any) {

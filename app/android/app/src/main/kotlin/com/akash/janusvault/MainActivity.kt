@@ -1,9 +1,9 @@
-package com.example.janusvault
+package com.akash.janusvault
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import com.example.janusvault.app.ApprovalNotifier
+import com.akash.janusvault.app.ApprovalNotifier
 
 class MainActivity : FlutterFragmentActivity() {
     companion object {

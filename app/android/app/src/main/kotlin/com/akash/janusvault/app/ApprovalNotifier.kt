@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

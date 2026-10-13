@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.janusvault"
+    namespace = "com.akash.janusvault"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.janusvault"
+        applicationId = "com.akash.janusvault"
         // Android's Autofill Framework (android.service.autofill.*, used by
         // JanusVaultAutofillService) requires API 26 (Android 8.0) at
         // minimum — this is a hard floor, not a preference, so it's set

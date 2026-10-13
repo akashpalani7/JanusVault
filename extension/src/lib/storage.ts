@@ -37,6 +37,20 @@ export class ExtensionStorage {
     }
   }
 
+  private static _storageLock: Promise<void> = Promise.resolve();
+
+  private static async _withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this._storageLock;
+    let resolver: () => void;
+    this._storageLock = new Promise<void>((r) => { resolver = r; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      resolver!();
+    }
+  }
+
   static async getAllEntries(): Promise<EncryptedEntryRecord[]> {
     return (await this._get(ENTRIES_KEY)) ?? [];
   }
@@ -46,15 +60,17 @@ export class ExtensionStorage {
   }
 
   static async upsertEntries(incoming: EncryptedEntryRecord[]): Promise<void> {
-    const existing = await this.getAllEntries();
-    const byUuid = new Map(existing.map((e) => [e.uuid, e]));
-    for (const entry of incoming) {
-      const current = byUuid.get(entry.uuid);
-      if (!current || new Date(entry.lastUpdated) > new Date(current.lastUpdated)) {
-        byUuid.set(entry.uuid, entry);
+    return this._withLock(async () => {
+      const existing = await this.getAllEntries();
+      const byUuid = new Map(existing.map((e) => [e.uuid, e]));
+      for (const entry of incoming) {
+        const current = byUuid.get(entry.uuid);
+        if (!current || new Date(entry.lastUpdated).getTime() >= new Date(current.lastUpdated).getTime()) {
+          byUuid.set(entry.uuid, entry);
+        }
       }
-    }
-    await this.saveAllEntries(Array.from(byUuid.values()));
+      await this.saveAllEntries(Array.from(byUuid.values()));
+    });
   }
 
   /**

@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -27,7 +27,7 @@ import androidx.annotation.RequiresApi
 import androidx.autofill.inline.UiVersions
 import androidx.autofill.inline.v1.InlineSuggestionUi
 import androidx.core.app.NotificationCompat
-import com.example.janusvault.MainActivity
+import com.akash.janusvault.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -131,9 +131,9 @@ class JanusVaultAutofillService : AutofillService() {
                         .distinct()
                         .toTypedArray()
                     
-                    val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
-                        setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD13 Unlock JanusVault")
-                        setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
+                    val presentation = RemoteViews(packageName, com.akash.janusvault.R.layout.autofill_remote_view).apply {
+                        setTextViewText(com.akash.janusvault.R.id.title, "\uD83D\uDD13 Unlock JanusVault")
+                        setViewVisibility(com.akash.janusvault.R.id.subtitle, android.view.View.GONE) // Hide subtitle
                     }
 
                     val authDatasetBuilder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())

@@ -139,7 +139,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       await _save();
                       
                       final purged = await VaultRepository.instance.purgeExpiredRecycleBin(retentionDays: v);
-                      if (purged > 0 && mounted) {
+                      if (purged > 0 && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Automatically purged $purged overdue entries.')));
                       }
                     },

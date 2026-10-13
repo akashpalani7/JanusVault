@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 
 import '../vault/vault_session.dart';
@@ -64,12 +63,13 @@ class NearbySyncService {
       );
       _isAdvertising = result;
       if (result) {
-        print('NearbySyncService: Advertising started as $deviceDisplayName');
+        debugPrint(
+            'NearbySyncService: Advertising started as $deviceDisplayName');
         onStatusChanged?.call('Discoverable via Bluetooth');
       }
       return result;
     } catch (e) {
-      print('NearbySyncService: Failed to start advertising: $e');
+      debugPrint('NearbySyncService: Failed to start advertising: $e');
       return false;
     }
   }
@@ -95,12 +95,12 @@ class NearbySyncService {
         'JanusVault', // our name visible to peers
         _strategy,
         onEndpointFound: (id, name, serviceId) {
-          print('NearbySyncService: Found peer $name ($id)');
+          debugPrint('NearbySyncService: Found peer $name ($id)');
           onPeerDiscovered?.call(id, name);
         },
         onEndpointLost: (id) {
           final String safeId = id ?? '';
-          print('NearbySyncService: Lost peer $safeId');
+          debugPrint('NearbySyncService: Lost peer $safeId');
           onPeerLost?.call(safeId);
         },
         serviceId: _serviceId,
@@ -111,7 +111,7 @@ class NearbySyncService {
       }
       return result;
     } catch (e) {
-      print('NearbySyncService: Failed to start discovery: $e');
+      debugPrint('NearbySyncService: Failed to start discovery: $e');
       return false;
     }
   }
@@ -148,7 +148,8 @@ class NearbySyncService {
   // -------------------------------------------------------------------
 
   void _onConnectionInitiated(String endpointId, ConnectionInfo info) {
-    print('NearbySyncService: Connection initiated with ${info.endpointName}');
+    debugPrint(
+        'NearbySyncService: Connection initiated with ${info.endpointName}');
     // Auto-accept — VEK handshake provides our own authentication layer
     Nearby().acceptConnection(
       endpointId,
@@ -163,13 +164,14 @@ class NearbySyncService {
 
   void _onConnectionResult(String endpointId, Status status) {
     if (status == Status.CONNECTED) {
-      print('NearbySyncService: Connected to $endpointId');
+      debugPrint('NearbySyncService: Connected to $endpointId');
       onStatusChanged?.call('Connected — authenticating...');
 
       // Create handler and start VEK handshake
       final handler = SyncConnectionHandler(
         transport: _NearbyTransport(endpointId),
-        vek: VaultSession.instance.isUnlocked ? VaultSession.instance.vek : null,
+        vek:
+            VaultSession.instance.isUnlocked ? VaultSession.instance.vek : null,
         onAuthPromptRequested: onAuthPromptRequested,
         onPairingRequested: onPairingRequested,
         onRecordsUpdated: recordsUpdatedCallback,
@@ -200,7 +202,7 @@ class NearbySyncService {
   }
 
   void _onDisconnected(String endpointId) {
-    print('NearbySyncService: Disconnected from $endpointId');
+    debugPrint('NearbySyncService: Disconnected from $endpointId');
     _connections.remove(endpointId);
     onStatusChanged?.call('Disconnected');
   }
@@ -229,7 +231,7 @@ class NearbySyncService {
         }
       });
     } catch (e) {
-      print('NearbySyncService: Error processing payload: $e');
+      debugPrint('NearbySyncService: Error processing payload: $e');
     }
   }
 

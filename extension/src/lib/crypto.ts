@@ -205,26 +205,31 @@ export function generatePairingCode(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(16));
 }
 
-/** Builds a full pairing package string ("janusvault-pair:v2:<code>:<wrappedVek>")
+/** Builds a full pairing package string ("janusvault-pair:v2:<code>:<wrappedVek>[:<deviceId>]")
  * from this browser's own unwrapped VEK, exactly like DeviceManager.createPairingPackage
  * on the Dart side — so a phone's camera can scan a QR generated FROM the
  * extension popup, not just the other way around. */
-export async function buildPairingPackage(vek: CryptoKey): Promise<{ printableCode: string; encoded: string }> {
+export async function buildPairingPackage(vek: CryptoKey): Promise<{ printableCode: string; encoded: string; deviceId: string }> {
   const codeBytes = generatePairingCode();
   const pairingKey = await deriveKeyFromPairingCode(codeBytes);
   const wrappedForTransit = await wrapVek(vek, pairingKey);
   const printableCode = encodeCrockfordBase32(codeBytes);
-  return { printableCode, encoded: `janusvault-pair:v2:${printableCode}:${wrappedForTransit}` };
+  const deviceId = `ext_${Date.now()}`;
+  return { printableCode, encoded: `janusvault-pair:v2:${printableCode}:${wrappedForTransit}:${deviceId}`, deviceId };
 }
 
 /** Parses the full pairing payload from a scanned/typed QR string:
- * "janusvault-pair:v2:<code>:<wrappedVek>" */
-export function parsePairingPackage(raw: string): { pairingCodePrintable: string; wrappedVekForTransitBase64: string } {
+ * "janusvault-pair:v2:<code>:<wrappedVek>[:<deviceId>]" */
+export function parsePairingPackage(raw: string): { pairingCodePrintable: string; wrappedVekForTransitBase64: string; deviceId?: string } {
   const parts = raw.split(":");
-  if (parts.length !== 4 || parts[0] !== "janusvault-pair" || parts[1] !== "v2") {
+  if ((parts.length !== 4 && parts.length !== 5) || parts[0] !== "janusvault-pair" || parts[1] !== "v2") {
     throw new Error("Not a valid JanusVault pairing code");
   }
-  return { pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3] };
+  return {
+    pairingCodePrintable: parts[2],
+    wrappedVekForTransitBase64: parts[3],
+    deviceId: parts.length === 5 ? parts[4] : undefined
+  };
 }
 
 // ---------------------------------------------------------------------

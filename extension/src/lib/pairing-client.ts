@@ -85,7 +85,8 @@ export function requestBlePairing(
   onPinReady: (pin: string) => void,
   forcePrompt: boolean = false,
   onLog?: (msg: string) => void,
-  preAuthorizedDevice?: any
+  preAuthorizedDevice?: any,
+  acceptAllDevices: boolean = false
 ): Promise<PairingOutcome> {
   return new Promise(async (resolve) => {
     const JANUSVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
@@ -108,7 +109,7 @@ export function requestBlePairing(
 
     try {
       if (!device) {
-          if (!forcePrompt) {
+          if (!forcePrompt && !acceptAllDevices) {
             try {
               const devices = await (navigator as any).bluetooth.getDevices();
               device = devices.find((d: any) => !!d.id);
@@ -116,44 +117,72 @@ export function requestBlePairing(
           }
 
           if (!device) {
-            device = await (navigator as any).bluetooth.requestDevice({
-              filters: [{ services: [JANUSVAULT_SERVICE_UUID] }]
-            });
+            const options: any = acceptAllDevices
+              ? {
+                  acceptAllDevices: true,
+                  optionalServices: [JANUSVAULT_SERVICE_UUID],
+                }
+              : {
+                  filters: [
+                    { services: [JANUSVAULT_SERVICE_UUID] },
+                    { namePrefix: 'Janus' },
+                    { name: 'JanusVault' },
+                  ],
+                  optionalServices: [JANUSVAULT_SERVICE_UUID],
+                };
+            device = await (navigator as any).bluetooth.requestDevice(options);
           }
       }
       connectionTimeout = setTimeout(() => {
         finish({ success: false, reason: "Connection timed out. The phone is unreachable or not responding." });
       }, 20000);
 
-      let char: any;
-      for (let i = 0; i < 4; i++) {
+      onLog?.(`Connecting to ${device.name || 'phone'}...`);
+      server = await device.gatt.connect();
+      onLog?.('Connected! Waiting for Bluetooth link to settle...');
+      await new Promise(r => setTimeout(r, 1200));
+
+      let service: any;
+      for (let s = 0; s < 6; s++) {
+        if (aborted) return;
         try {
-          server = await device.gatt.connect();
-          if (aborted) return;
-          await new Promise(r => setTimeout(r, 600)); // Crucial delay for Windows GATT cache
-          if (aborted) return;
-          const service = await server.getPrimaryService(JANUSVAULT_SERVICE_UUID);
-          if (aborted) return;
-          char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
-          if (aborted) return;
-          break; // Connected and services found
-        } catch (e) {
-          if (aborted) return;
-          if (i === 3) {
-             return finish({ success: false, reason: "Could not establish connection to the phone. Ensure Bluetooth is on." });
+          if (!server.connected) {
+            onLog?.(`Reconnecting GATT (attempt ${s + 1}/6)...`);
+            server = await device.gatt.connect();
+            await new Promise(r => setTimeout(r, 800));
           }
-          console.warn(`GATT dropped, retrying in 1s... (${i+1}/4)`);
+          onLog?.(`Discovering JanusVault service (attempt ${s + 1}/6)...`);
+          service = await server.getPrimaryService(JANUSVAULT_SERVICE_UUID);
+          if (service) break;
+        } catch (e: any) {
+          console.warn(`getPrimaryService attempt ${s + 1} failed: ${e.message}`);
           await new Promise(r => setTimeout(r, 1000));
-          if (aborted) return;
         }
       }
-      if (!char || aborted) {
-          if (!aborted) finish({ success: false, reason: "Connection to phone failed or services are unavailable." });
-          return;
+
+      if (!service || aborted) {
+        if (!aborted) finish({ success: false, reason: "Could not find JanusVault service on phone. Ensure 'Advertise via Bluetooth' is ON in the mobile app." });
+        return;
       }
-      
-      clearTimeout(connectionTimeout); // Successfully connected, stop the abort timer
-      
+
+      onLog?.('Service discovered! Discovering characteristic...');
+      let char: any;
+      for (let c = 0; c < 4; c++) {
+        if (aborted) return;
+        try {
+          char = await service.getCharacteristic(SYNC_CHARACTERISTIC_UUID);
+          if (char) break;
+        } catch (e: any) {
+          console.warn(`getCharacteristic attempt ${c + 1} failed: ${e.message}`);
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      if (!char || aborted) {
+        if (!aborted) finish({ success: false, reason: "Could not find sync characteristic on phone." });
+        return;
+      }
+
       let myKeyPair: CryptoKeyPair;
       let lastSharedSecret: Uint8Array | null = null;
       let inboundBuffer = "";
@@ -162,7 +191,7 @@ export function requestBlePairing(
         const dataView = event.target.value; // DataView
         const text = new TextDecoder().decode(dataView);
         console.log(`[Ext/BLE Pairing] Received chunk len=${text.length}, text: ${text}`);
-        if(onLog) onLog(`Chunk rx: len=${text.length}, hasEom=${text.includes(EOM_MARKER)}`);
+        if(onLog) onLog(`Receiving phone response (${text.length} bytes)...`);
         
         inboundBuffer += text;
 
@@ -171,13 +200,12 @@ export function requestBlePairing(
           const fullMessage = inboundBuffer.substring(0, eomIdx);
           inboundBuffer = inboundBuffer.substring(eomIdx + 1);
           console.log(`[Ext/BLE Pairing] Complete message assembled: ${fullMessage}`);
-          if(onLog) onLog(`Full Msg parsed!`);
 
           try {
             const message = JSON.parse(fullMessage) as SyncMessage;
 
             if (message.type === "pairingChallenge") {
-              if(onLog) onLog(`Challenge rx - deriving secret`);
+              onLog?.('Challenge received! Verifying encryption keys...');
               try {
                   const peerJwk = message.payload.pubKey as string;
                   const sharedSecret = await deriveEcdhSharedSecret(myKeyPair.privateKey, peerJwk);
@@ -185,8 +213,7 @@ export function requestBlePairing(
                   const pin = await computeEcdhPin(sharedSecret);
                   onPinReady(pin);
               } catch(cryptoErr: any) {
-                  if(onLog) onLog(`Crypto crash! ${cryptoErr.message}`);
-                  finish({ success: false, reason: `Crypto crash: ${cryptoErr.message}` });
+                  finish({ success: false, reason: `Crypto error: ${cryptoErr.message}` });
               }
             } else if (message.type === "pairingSuccess") {
               const wrappedVek = message.payload.wrappedVek as string;
@@ -196,32 +223,38 @@ export function requestBlePairing(
               finish({ success: false, reason: message.payload.message as string });
             }
           } catch (e: any) {
-            if(onLog) onLog(`JSON Parse or Unknown crash: ${e.message}`);
             finish({ success: false, reason: "Malformed response from phone." });
           }
         }
       });
 
+      onLog?.('Subscribing to notifications...');
       await char.startNotifications();
-      await new Promise(r => setTimeout(r, 500)); // Give Windows BT stack time
+      await new Promise(r => setTimeout(r, 400));
+
+      device.addEventListener('gattserverdisconnected', () => {
+        if (!aborted) {
+          finish({ success: false, reason: "Phone dropped the Bluetooth connection." });
+        }
+      });
 
       const send = async (msg: string) => {
         const encoder = new TextEncoder();
         const bytes = encoder.encode(msg + EOM_MARKER);
-        const chunkSize = 480;
+        const chunkSize = 128; // Safe chunk size compatible with all BLE MTU limits
         for (let i = 0; i < bytes.length; i += chunkSize) {
           const end = Math.min(i + chunkSize, bytes.length);
           const chunk = bytes.slice(i, end);
-          await char.writeValue(chunk);
+          if (typeof (char as any).writeValueWithResponse === 'function') {
+            await (char as any).writeValueWithResponse(chunk);
+          } else {
+            await char.writeValue(chunk);
+          }
+          await new Promise(r => setTimeout(r, 30));
         }
       };
 
-
-
-      device.addEventListener('gattserverdisconnected', () => {
-        finish({ success: false, reason: "Phone dropped the connection abruptly or rejected." });
-      });
-
+      onLog?.('Generating key pair...');
       myKeyPair = await generateEcdhKeyPair();
       const jwk = await exportJwEcdhKey(myKeyPair.publicKey);
       let devId = await ExtensionStorage.getDeviceId();
@@ -229,6 +262,8 @@ export function requestBlePairing(
         devId = `ext_${Date.now()}`;
         await ExtensionStorage.saveDeviceId(devId);
       }
+
+      onLog?.('Sending pairing request to phone...');
       await send(JSON.stringify({ 
         type: "pairingRequest", 
         payload: { 
@@ -239,6 +274,12 @@ export function requestBlePairing(
           deviceId: devId
         } 
       } as SyncMessage));
+
+      onLog?.('Pairing request sent! Awaiting verification PIN from phone...');
+      clearTimeout(connectionTimeout);
+      connectionTimeout = setTimeout(() => {
+        finish({ success: false, reason: "Phone did not respond within 60s. Make sure JanusVault is open on your phone." });
+      }, 60000);
 
     } catch (e) {
       finish({ success: false, reason: `Bluetooth pairing failed: ${e instanceof Error ? e.message : String(e)}` });

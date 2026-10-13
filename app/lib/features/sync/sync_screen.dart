@@ -184,7 +184,9 @@ class _LanSyncTabState extends ConsumerState<_LanSyncTab> with AutomaticKeepAliv
                   child: Icon(Icons.wifi_tethering, color: Theme.of(context).colorScheme.onPrimaryContainer),
                 ),
                 title: const Text('Make discoverable on WiFi', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text(_selfAddress == null ? 'Connect to WiFi or hotspot first' : '1. Enter janusvault.local:${ref.read(lanSyncServiceProvider).boundPort} on PC\n2. Backup IP: $_selfAddress:${ref.read(lanSyncServiceProvider).boundPort}'),
+                subtitle: Text(_selfAddress == null
+                    ? 'Connect to WiFi or hotspot first'
+                    : 'Enter on PC: $_selfAddress:${ref.read(lanSyncServiceProvider).boundPort ?? 51827}'),
                 value: _hosting,
                 onChanged: _toggleHosting,
               ),
@@ -291,15 +293,29 @@ class _BleGattTabState extends ConsumerState<_BleGattTab> with AutomaticKeepAliv
   @override
   void initState() {
     super.initState();
-    _hosting = ref.read(bleGattServiceProvider).isAdvertising;
+    final service = ref.read(bleGattServiceProvider);
+    _hosting = service.isAdvertising;
+    service.onStatusChanged = (status) {
+      if (mounted) {
+        setState(() {
+          _status = status;
+          _hosting = ref.read(bleGattServiceProvider).isAdvertising;
+        });
+      }
+    };
   }
 
   Future<bool> _checkPermissions() async {
-    await [
+    final statuses = await [
       Permission.bluetooth,
       Permission.bluetoothAdvertise,
       Permission.bluetoothConnect,
+      Permission.location,
     ].request();
+    if (statuses[Permission.bluetoothAdvertise]?.isPermanentlyDenied == true ||
+        statuses[Permission.bluetoothConnect]?.isPermanentlyDenied == true) {
+      return false;
+    }
     return true;
   }
 
@@ -399,7 +415,7 @@ class _NearbySyncTabState extends ConsumerState<_NearbySyncTab> with AutomaticKe
   bool _advertising = false;
   bool _discovering = false;
   String _status = '';
-  List<Map<String, String>> _foundPeers = [];
+  final List<Map<String, String>> _foundPeers = [];
 
   @override
   bool get wantKeepAlive => true;

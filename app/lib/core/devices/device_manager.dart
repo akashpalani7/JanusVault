@@ -5,6 +5,7 @@ import '../crypto/crypto_engine.dart';
 import '../models/trusted_device.dart';
 import '../storage/secure_key_store.dart';
 import '../storage/vault_database.dart';
+import '../sync/lan_sync_service.dart';
 import '../sync/sync_protocol.dart';
 import '../vault/vault_session.dart';
 
@@ -16,23 +17,33 @@ import '../vault/vault_session.dart';
 class PairingPackage {
   final String pairingCodePrintable;
   final String wrappedVekForTransitBase64;
+  final String? deviceId;
 
-  const PairingPackage(
-      {required this.pairingCodePrintable,
-      required this.wrappedVekForTransitBase64});
+  const PairingPackage({
+    required this.pairingCodePrintable,
+    required this.wrappedVekForTransitBase64,
+    this.deviceId,
+  });
 
   /// Encodes as a single string suitable for a QR code or manual typing:
-  /// "janusvault-pair:v2:<code>:<wrappedVek>"
-  String encode() =>
-      'janusvault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
+  /// `"janusvault-pair:v2:<code>:<wrappedVek>[:<deviceId>]"`
+  String encode() {
+    if (deviceId != null && deviceId!.isNotEmpty) {
+      return 'janusvault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64:$deviceId';
+    }
+    return 'janusvault-pair:v2:$pairingCodePrintable:$wrappedVekForTransitBase64';
+  }
 
   static PairingPackage decode(String raw) {
     final parts = raw.split(':');
-    if (parts.length != 4 || parts[0] != 'janusvault-pair' || parts[1] != 'v2') {
+    if ((parts.length != 4 && parts.length != 5) || parts[0] != 'janusvault-pair' || parts[1] != 'v2') {
       throw const FormatException('Not a valid JanusVault pairing code');
     }
     return PairingPackage(
-        pairingCodePrintable: parts[2], wrappedVekForTransitBase64: parts[3]);
+      pairingCodePrintable: parts[2],
+      wrappedVekForTransitBase64: parts[3],
+      deviceId: parts.length == 5 ? parts[4] : null,
+    );
   }
 }
 
@@ -84,15 +95,32 @@ class DeviceManager {
   /// Called on the device that ALREADY holds the vault, to produce a
   /// one-shot pairing package containing everything a brand-new device
   /// needs — the whole handshake fits in a single QR code.
-  Future<PairingPackage> createPairingPackage() async {
+  Future<PairingPackage> createPairingPackage({
+    String? targetDeviceId,
+    String? targetDisplayName,
+  }) async {
     final engine = CryptoEngine.instance;
     final code = engine.generatePairingCode();
     final pairingKey = await engine.derivePairingKeyFromCode(code);
     final wrapped = await engine.wrapKey(
         keyToWrap: VaultSession.instance.vek, wrappingKey: pairingKey);
+    final devId = targetDeviceId ?? 'ext_${DateTime.now().millisecondsSinceEpoch}';
+    final now = DateTime.now().toUtc();
+
+    await _db.upsertDevice(TrustedDeviceRecord(
+      deviceId: devId,
+      displayName: targetDisplayName ?? 'Browser Extension',
+      platform: DevicePlatform.browserExtension.name,
+      pairedAt: now,
+      lastSyncedAt: now,
+      revoked: false,
+      wrappedVekBase64: '',
+    ));
+
     return PairingPackage(
       pairingCodePrintable: engine.encodePairingCode(code),
       wrappedVekForTransitBase64: wrapped.toBase64(),
+      deviceId: devId,
     );
   }
 
@@ -123,7 +151,7 @@ class DeviceManager {
     final wrappedForStorage =
         await engine.wrapKey(keyToWrap: vek, wrappingKey: deviceLocalKey);
 
-    final deviceId = 'dev_${DateTime.now().microsecondsSinceEpoch}';
+    final deviceId = package.deviceId ?? 'dev_${DateTime.now().microsecondsSinceEpoch}';
     final now = DateTime.now().toUtc();
 
     await _db.upsertDevice(TrustedDeviceRecord(
@@ -260,6 +288,9 @@ class DeviceManager {
     if (record == null) return;
     record.revoked = true;
     await _db.upsertDevice(record);
+    try {
+      LanSyncService.instance.disconnectRevokedDevice(deviceId);
+    } catch (_) {}
   }
 
   /// Full key rotation after a suspected compromise: generates a brand-new

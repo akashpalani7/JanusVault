@@ -28,6 +28,7 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
   bool _isLoading = true;
   bool _notificationGranted = false;
   bool _bluetoothGranted = false;
+  bool _locationGranted = false;
   bool _isProcessingPerms = false; // Used to show loading state during request
 
   @override
@@ -64,15 +65,18 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
       final c = await Permission.bluetoothConnect.status;
       final s = await Permission.bluetoothScan.status;
       final a = await Permission.bluetoothAdvertise.status;
-      final l = await Permission.location.status;
-      btGranted = (c.isGranted && s.isGranted && a.isGranted) || l.isGranted;
+      btGranted = (c.isGranted && s.isGranted && a.isGranted);
     } else {
       btGranted = (await Permission.bluetooth.status).isGranted;
     }
 
+    final locStatus = await Permission.location.status;
+    final locGranted = locStatus.isGranted;
+
     if (mounted) {
       setState(() {
         _bluetoothGranted = btGranted;
+        _locationGranted = locGranted;
         _isLoading = false;
       });
     }
@@ -103,13 +107,8 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
         Permission.bluetoothScan,
         Permission.bluetoothAdvertise,
       ].request();
-      
-      bool granted = statuses.values.every((s) => s.isGranted);
-      if (!granted) {
-        final lStatus = await Permission.location.request();
-        if (lStatus.isPermanentlyDenied) {
-          await openAppSettings();
-        }
+      if (statuses.values.any((s) => s.isPermanentlyDenied)) {
+        await openAppSettings();
       }
     } else {
       final status = await Permission.bluetooth.request();
@@ -118,6 +117,17 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
       }
     }
     await _checkStatusesOnly(startupCheck: false);
+    if (mounted) setState(() => _isProcessingPerms = false);
+  }
+
+  Future<void> _requestLocation() async {
+    setState(() => _isProcessingPerms = true);
+    final status = await Permission.location.request();
+    if (status.isPermanentlyDenied) {
+      await openAppSettings();
+    } else {
+      await _checkStatusesOnly(startupCheck: false);
+    }
     if (mounted) setState(() => _isProcessingPerms = false);
   }
 
@@ -326,6 +336,16 @@ class _PermissionsScreenState extends State<PermissionsScreen> with WidgetsBindi
                       onRequest: _requestBluetooth,
                       isMandatory: false,
                     ),
+                    // Device Location Card (Optional for Nearby Share)
+                    if (Platform.isAndroid)
+                      _buildPermissionCard(
+                        icon: Icons.location_on_outlined,
+                        title: 'Device Location',
+                        description: 'Required by Android to discover and sync with nearby peer devices (Nearby Share) entirely offline without tracking your GPS.',
+                        isGranted: _locationGranted,
+                        onRequest: _requestLocation,
+                        isMandatory: false,
+                      ),
                     const SizedBox(height: 24),
                     Container(
                       padding: const EdgeInsets.all(16),

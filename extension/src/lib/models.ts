@@ -41,7 +41,7 @@ export type SyncMessage =
   | { type: "records"; payload: { entries: EncryptedEntryRecord[] } }
   | { type: "done"; payload: Record<string, never> }
   | { type: "error"; payload: { message: string } }
-  | { type: "authRequest"; payload: { requestId: string; actionLabel: string } }
+  | { type: "authRequest"; payload: { requestId: string; actionLabel: string; deviceId?: string } }
   | { type: "authResponse"; payload: { requestId: string; approved: boolean } }
   | { type: "pairingRequest"; payload: { deviceName: string; pubKey: string; clientName?: string; platform?: string; deviceId?: string; } }
   | { type: "pairingChallenge"; payload: { pubKey: string } }

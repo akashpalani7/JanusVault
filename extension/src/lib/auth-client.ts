@@ -1,5 +1,6 @@
 import { SyncMessage } from "./models.js";
 import { hmacSha256 } from "./crypto.js";
+import { ExtensionStorage } from "./storage.js";
 
 export type PhoneAuthOutcome = "approved" | "denied" | "unreachable" | "timeout";
 
@@ -75,22 +76,30 @@ export function requestPhoneApproval(
         }
 
         if (message.type === "helloResponse") {
-          // In auth-client, we don't strictly need to do anything with the response, 
-          // because the server's deviceInfo message is the true explicit proof of verification.
           return;
         }
 
         if (message.type === "deviceInfo" && !authRequestSent) {
-          // The phone only ever sends this after successfully verifying
-          // our handshake response — safe to send the real request now.
           authRequestSent = true;
-          socket.send(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel } } satisfies SyncMessage));
+          const deviceId = (await ExtensionStorage.getDeviceId()) || "";
+          socket.send(JSON.stringify({ type: "authRequest", payload: { requestId, actionLabel, deviceId } } satisfies SyncMessage));
           return;
         }
 
         if (message.type === "authResponse" && message.payload.requestId === requestId) {
           console.log(`Auth socket: Received response: ${message.payload.approved}`);
           finish(message.payload.approved ? "approved" : "denied");
+          return;
+        }
+
+        if (message.type === "error") {
+          const errMsg = (message.payload.message || "") as string;
+          if (errMsg.toLowerCase().includes("revoked")) {
+            await ExtensionStorage.wipeAll();
+            chrome.runtime.sendMessage({ type: "LOCK_VAULT" }).catch(() => {});
+          }
+          finish("denied");
+          return;
         }
       } catch {
         // Malformed frame — ignore rather than crash the popup.

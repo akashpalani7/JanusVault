@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:ble_peripheral/ble_peripheral.dart';
+import 'package:flutter/foundation.dart';
 
 import '../vault/vault_session.dart';
 import 'sync_message_handler.dart';
@@ -51,6 +51,7 @@ class BleGattService {
   void Function()? recordsUpdatedCallback;
   Future<bool> Function(String actionLabel)? onAuthPromptRequested;
   Future<bool> Function(String deviceName, String pin)? onPairingRequested;
+  void Function(String status)? onStatusChanged;
 
   /// Buffer for reassembling chunked messages from the BLE central.
   final StringBuffer _incomingBuffer = StringBuffer();
@@ -98,29 +99,47 @@ class BleGattService {
         _isInitialized = true;
       }
 
+      // Track status updates from the native BLE stack
+      BlePeripheral.setAdvertisingStatusUpdateCallback(
+          (bool advertising, String? error) {
+        debugPrint(
+            'BleGattService: Advertising update: advertising=$advertising, error=$error');
+        _isAdvertising = advertising;
+        if (error != null && error.isNotEmpty) {
+          onStatusChanged?.call('BLE Error: $error');
+        } else if (advertising) {
+          onStatusChanged?.call('Waiting for PC to connect via browser extension...');
+        } else {
+          onStatusChanged?.call('Bluetooth advertising stopped');
+        }
+      });
+
       // Listen for incoming writes on the sync characteristic
       BlePeripheral.setWriteRequestCallback(_onWriteRequest);
       BlePeripheral.setReadRequestCallback(_onReadRequest);
       BlePeripheral.setConnectionStateChangeCallback(
           (String deviceId, bool connected) {
-        print('BleGattService: Device $deviceId connected=$connected');
+        debugPrint('BleGattService: Device $deviceId connected=$connected');
         if (!connected) {
           _handler = null;
           _incomingBuffer.clear();
           _activeDeviceId = null;
-          print('BleGattService: Cleaned up after disconnect');
+          debugPrint('BleGattService: Cleaned up after disconnect');
         }
       });
 
-      // Start advertising
+      // Start advertising: pass localName: null so Android does NOT attempt
+      // to insert the device name into the 31-byte legacy advertisement packet,
+      // which would cause ADVERTISE_FAILED_DATA_TOO_LARGE. The 128-bit UUID
+      // alone fits comfortably within 31 bytes.
       await BlePeripheral.startAdvertising(
         services: [kJanusVaultBleServiceUuid],
         localName: null,
       );
 
       _isAdvertising = true;
-      print(
-          'BleGattService: Advertising started as JanusVault-$deviceDisplayName');
+      onStatusChanged?.call('Waiting for PC to connect via browser extension...');
+      debugPrint('BleGattService: Advertising started with UUID $kJanusVaultBleServiceUuid');
     } catch (e) {
       String errMsg = e.toString();
       if (errMsg.contains('UnsupportedOperationException')) {
@@ -128,8 +147,9 @@ class BleGattService {
       } else if (errMsg.contains('SecurityException')) {
         errMsg = 'Bluetooth permissions missing or denied.';
       }
-      print('BleGattService: Failed to start advertising: $errMsg');
+      debugPrint('BleGattService: Failed to start advertising: $errMsg');
       _isAdvertising = false;
+      onStatusChanged?.call(errMsg);
       throw Exception(errMsg);
     }
   }
@@ -144,7 +164,7 @@ class BleGattService {
     _handler = null;
     _incomingBuffer.clear();
     _activeDeviceId = null;
-    print('BleGattService: Advertising stopped');
+    debugPrint('BleGattService: Advertising stopped');
   }
 
   // -------------------------------------------------------------------
@@ -157,7 +177,7 @@ class BleGattService {
   WriteRequestResult? _onWriteRequest(
       String deviceId, String characteristicId, int offset, Uint8List? value) {
     if (_activeDeviceId != null && _activeDeviceId != deviceId) {
-      print('BleGattService: Automatically terminating stale connection $_activeDeviceId because another device ($deviceId) wrote data!');
+      debugPrint('BleGattService: Automatically terminating stale connection $_activeDeviceId because another device ($deviceId) wrote data!');
       _handler = null;
       _incomingBuffer.clear();
       _activeDeviceId = deviceId;
@@ -167,7 +187,7 @@ class BleGattService {
     if (value == null || value.isEmpty) return WriteRequestResult(status: 0);
 
     final chunk = utf8.decode(value, allowMalformed: true);
-    print(
+    debugPrint(
         'BleGattService: _onWriteRequest chunk length: ${chunk.length}, EOM: ${chunk.contains(kEomMarker)}');
     _incomingBuffer.write(chunk);
     final currentBuffer = _incomingBuffer.toString();
@@ -229,7 +249,7 @@ class BleGattService {
         currentHandler.sendDeviceInfo();
       }
     } catch (e) {
-      print('BleGattService: Error processing message: $e');
+      debugPrint('BleGattService: Error processing message: $e');
       final errorMsg =
           SyncMessage(SyncMsgType.error, {'message': e.toString()});
       _sendChunkedNotification(deviceId, errorMsg.encode());
@@ -244,7 +264,7 @@ class BleGattService {
   /// characteristic. Large messages are automatically chunked.
   static Future<void> _sendChunkedNotification(
       String deviceId, String jsonMessage) async {
-    print(
+    debugPrint(
         'BleGattService: _sendChunkedNotification (len=${jsonMessage.length})');
     final data = '$jsonMessage$kEomMarker';
     final bytes = utf8.encode(data);
@@ -255,13 +275,13 @@ class BleGattService {
           : offset + kBleChunkSize;
       final chunk = Uint8List.fromList(bytes.sublist(offset, end));
       try {
-        print(
+        debugPrint(
             'BleGattService: Instructing native plugin to notify chunk len=${chunk.length} to deviceId=$deviceId');
         BlePeripheral.updateCharacteristic(
           characteristicId: kSyncCharacteristicUuid,
           value: chunk,
         );
-        print(
+        debugPrint(
             'BleGattService: updateCharacteristic returned successfully for chunk');
 
         // Critical: Provide generous spacing between Bluetooth notifications.
@@ -269,7 +289,7 @@ class BleGattService {
         // synchronous notifications if pushed too quickly inside the same GATT interval.
         await Future.delayed(const Duration(milliseconds: 60));
       } catch (e) {
-        print('BleGattService: FAILED to updateCharacteristic: $e');
+        debugPrint('BleGattService: FAILED to updateCharacteristic: $e');
       }
     }
   }
@@ -310,7 +330,7 @@ class _BleTransport implements SyncTransport {
         try {
           await task();
         } catch (e) {
-          print('BleGattService: Caught exception in queue task $e');
+          debugPrint('BleGattService: Caught exception in queue task $e');
         }
       }
     } finally {

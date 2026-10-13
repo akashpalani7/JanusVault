@@ -180,8 +180,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen>
                               ),
                               textCapitalization: TextCapitalization.words,
                               onChanged: (val) {
-                                if (_errorText != null)
+                                if (_errorText != null) {
                                   setState(() => _errorText = null);
+                                }
                               },
                             ),
                           ],

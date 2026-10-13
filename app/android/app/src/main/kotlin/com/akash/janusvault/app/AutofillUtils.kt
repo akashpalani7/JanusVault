@@ -1,4 +1,4 @@
-package com.example.janusvault.app
+package com.akash.janusvault.app
 
 import android.app.PendingIntent
 import android.content.Context
@@ -79,9 +79,9 @@ object AutofillUtils {
     ): Boolean {
         val passwordId = fields.passwordId ?: return false
 
-        val suggestPresentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
-            setTextViewText(com.example.janusvault.R.id.subtitle, "JanusVault Generator")
+        val suggestPresentation = RemoteViews(packageName, com.akash.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.akash.janusvault.R.id.title, "\uD83D\uDD12 Generate strong password")
+            setTextViewText(com.akash.janusvault.R.id.subtitle, "JanusVault Generator")
         }
 
         // Auth-gated: tapping the chip launches the generator activity
@@ -163,12 +163,12 @@ object AutofillUtils {
         index: Int,
         focusedId: AutofillId?,
     ): Dataset {
-        val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.janusvault.R.id.title, websiteName)
+        val presentation = RemoteViews(packageName, com.akash.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.akash.janusvault.R.id.title, websiteName)
             if (username.isNotBlank()) {
-                setTextViewText(com.example.janusvault.R.id.subtitle, username)
+                setTextViewText(com.akash.janusvault.R.id.subtitle, username)
             } else {
-                setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE)
+                setViewVisibility(com.akash.janusvault.R.id.subtitle, android.view.View.GONE)
             }
         }
         val inlinePresentation = buildInlinePresentation(context, spec, websiteName, username)
@@ -228,12 +228,12 @@ object AutofillUtils {
         focusedId: AutofillId?,
     ): Dataset {
         val builder = Dataset.Builder().setId(java.util.UUID.randomUUID().toString())
-        val presentation = RemoteViews(packageName, com.example.janusvault.R.layout.autofill_remote_view).apply {
-            setTextViewText(com.example.janusvault.R.id.title, websiteName)
+        val presentation = RemoteViews(packageName, com.akash.janusvault.R.layout.autofill_remote_view).apply {
+            setTextViewText(com.akash.janusvault.R.id.title, websiteName)
             if (username.isNotBlank()) {
-                setTextViewText(com.example.janusvault.R.id.subtitle, username)
+                setTextViewText(com.akash.janusvault.R.id.subtitle, username)
             } else {
-                setViewVisibility(com.example.janusvault.R.id.subtitle, android.view.View.GONE)
+                setViewVisibility(com.akash.janusvault.R.id.subtitle, android.view.View.GONE)
             }
         }
         

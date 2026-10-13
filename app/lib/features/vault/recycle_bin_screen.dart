@@ -20,7 +20,9 @@ class RecycleBinScreen extends ConsumerWidget {
                 onSelected: (value) async {
                   final repo = ref.read(vaultRepositoryProvider);
                   if (value == 'restore') {
-                    for (final e in entries) await repo.restoreEntry(e.uuid);
+                    for (final e in entries) {
+                      await repo.restoreEntry(e.uuid);
+                    }
                   } else if (value == 'empty') {
                     final confirm = await showDialog<bool>(
                       context: context,
@@ -38,7 +40,9 @@ class RecycleBinScreen extends ConsumerWidget {
                       ),
                     ) ?? false;
                     if (confirm) {
-                      for (final e in entries) await repo.hardDeleteEntry(e.uuid);
+                      for (final e in entries) {
+                        await repo.hardDeleteEntry(e.uuid);
+                      }
                     }
                   }
                   ref.invalidate(deletedEntriesProvider);

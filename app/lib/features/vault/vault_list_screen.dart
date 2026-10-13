@@ -3,7 +3,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_providers.dart';
-import '../../core/models/vault_entry.dart';
 import 'entry_editor_screen.dart';
 
 class VaultListScreen extends ConsumerStatefulWidget {

@@ -20,17 +20,53 @@ const resultsList = document.getElementById("resultsList") as HTMLUListElement;
 const emptyHint = document.getElementById("emptyHint") as HTMLParagraphElement;
 const hostInput = document.getElementById("hostInput") as HTMLInputElement;
 const syncNetworkSelect = document.getElementById("syncNetworkSelect") as HTMLSelectElement;
-syncNetworkSelect?.addEventListener("change", () => {
-  if (syncNetworkSelect.value === "hotspot") {
-    hostInput.value = "192.0.0.2:";
-  } else if (syncNetworkSelect.value === "wifi") {
-    hostInput.value = "janusvault.local:51827";
-  } else {
-    hostInput.value = "";
-    hostInput.placeholder = "192.168.x.x:51827";
+async function probeHotspotGateways(inputEl: HTMLInputElement, statusEl: HTMLElement): Promise<string> {
+  const candidateGateways = [
+    "192.168.43.1",
+    "192.168.225.1",
+    "192.168.42.1",
+    "192.168.49.1",
+    "10.42.0.1",
+    "172.20.10.1",
+    "192.168.137.1"
+  ];
+  inputEl.placeholder = "Scanning for phone hotspot...";
+  statusEl.textContent = "Probing mobile hotspot gateways...";
+  showSnackbar("Scanning for phone hotspot...", "info");
+
+  for (const gw of candidateGateways) {
+    const target = `${gw}:51827`;
+    try {
+      const socket = new WebSocket(`ws://${target}`);
+      const connected = await new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => {
+          try { socket.close(); } catch {}
+          resolve(false);
+        }, 700);
+        socket.onopen = () => {
+          clearTimeout(timeout);
+          try { socket.close(); } catch {}
+          resolve(true);
+        };
+        socket.onerror = () => {
+          clearTimeout(timeout);
+          resolve(false);
+        };
+      });
+      if (connected) {
+        inputEl.value = target;
+        statusEl.textContent = `Found phone hotspot gateway: ${target}`;
+        showSnackbar(`Found phone hotspot at ${target}!`, "success");
+        return target;
+      }
+    } catch {}
   }
-  hostInput.focus();
-});
+  inputEl.value = "192.168.43.1:51827";
+  statusEl.textContent = "Default set to 192.168.43.1:51827. If on Wi-Fi, enter the IP from your phone's Sync screen.";
+  showSnackbar("Set to 192.168.43.1:51827. Check phone's Sync screen if on Wi-Fi.", "info");
+  return "192.168.43.1:51827";
+}
+
 const syncButton = document.getElementById("syncButton") as HTMLButtonElement;
 const syncBleButton = document.getElementById("syncBleButton") as HTMLButtonElement;
 const authMethodSelect = document.getElementById("authMethodSelect") as HTMLSelectElement;
@@ -40,14 +76,33 @@ const pairingInput = document.getElementById("pairingInput") as HTMLTextAreaElem
 const pairButton = document.getElementById("pairButton") as HTMLButtonElement;
 const lanPairHostInput = document.getElementById("lanPairHostInput") as HTMLInputElement;
 const lanPairNetworkSelect = document.getElementById("lanPairNetworkSelect") as HTMLSelectElement;
-lanPairNetworkSelect?.addEventListener("change", () => {
+
+syncNetworkSelect?.addEventListener("change", async () => {
+  if (syncNetworkSelect.value === "hotspot") {
+    await probeHotspotGateways(hostInput, syncStatus);
+  } else if (syncNetworkSelect.value === "saved") {
+    const last = await ExtensionStorage.getLastHost();
+    if (last) hostInput.value = last;
+  } else {
+    hostInput.value = "";
+    hostInput.placeholder = "192.168.x.x:51827";
+  }
+  hostInput.focus();
+});
+
+const lanPairInlineStatus = document.getElementById("lanPairInlineStatus") as HTMLParagraphElement;
+
+lanPairNetworkSelect?.addEventListener("change", async () => {
   if (lanPairNetworkSelect.value === "hotspot") {
-    lanPairHostInput.value = "192.0.0.2:";
-  } else if (lanPairNetworkSelect.value === "wifi") {
-    lanPairHostInput.value = "janusvault.local:51827";
+    await probeHotspotGateways(lanPairHostInput, lanPairInlineStatus || pairStatus);
+  } else if (lanPairNetworkSelect.value === "saved") {
+    const last = await ExtensionStorage.getLastHost();
+    if (last) lanPairHostInput.value = last;
+    if (lanPairInlineStatus) lanPairInlineStatus.textContent = last ? `Loaded saved IP: ${last}` : "No saved IP found.";
   } else {
     lanPairHostInput.value = "";
     lanPairHostInput.placeholder = "192.168.x.x:51827";
+    if (lanPairInlineStatus) lanPairInlineStatus.textContent = "Enter your phone's IP from the JanusVault Sync screen.";
   }
   lanPairHostInput.focus();
 });
@@ -979,23 +1034,44 @@ importFileInput.addEventListener("change", async () => {
 const urlParamsExt = new URLSearchParams(window.location.search);
 if (urlParamsExt.get("mode") === "ble-pair") {
     document.body.innerHTML = `
-        <div style="text-align:center; padding:24px; font-family: sans-serif;">
-            <h3 style="margin-top:0; font-size:18px;">Pair JanusVault via Bluetooth</h3>
-            <p style="font-size:14px; margin-bottom:24px; color:#555;">Click below and select your phone from the list.</p>
-            <button id="blePairDialogBtn" style="padding:12px 24px; font-size:16px; background:#4b4bff; color:white; border:none; border-radius:6px; cursor:pointer; width:100%;">
-                Select Device
+        <div style="padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 400px; margin: 0 auto; color: #1e293b;">
+            <div style="text-align: center; margin-bottom: 20px;">
+                <div style="width: 48px; height: 48px; background: #eff6ff; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 8px;">
+                    <span style="font-size: 24px;">📶</span>
+                </div>
+                <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Pair via Bluetooth</h3>
+                <p style="font-size: 13px; color: #64748b; margin: 6px 0 0 0;">Connect directly to your mobile vault without Wi-Fi</p>
+            </div>
+
+            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; font-size: 12px; color: #475569; line-height: 1.5;">
+                <strong style="color: #0f172a; display: block; margin-bottom: 4px;">Before connecting:</strong>
+                1. Open JanusVault on your phone → <b>Sync</b> → <b>Bluetooth</b> tab.<br>
+                2. Turn <b>ON</b> "Advertise via Bluetooth".<br>
+                3. Ensure Bluetooth is ON on this PC.
+            </div>
+
+            <button id="blePairDialogBtn" style="padding: 12px; font-size: 14px; font-weight: 600; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer; width: 100%; transition: background 0.2s;">
+                Select JanusVault Device
             </button>
-            <p id="blePairDialogStatus" style="margin-top: 10px; font-size: 14px; font-weight: bold;"></p>
+
+            <button id="blePairAllBtn" style="margin-top: 10px; padding: 10px; font-size: 13px; background: transparent; color: #475569; border: 1px solid #cbd5e1; border-radius: 8px; cursor: pointer; width: 100%;">
+                Phone not showing? Show All Bluetooth Devices
+            </button>
+
+            <p id="blePairDialogStatus" style="margin-top: 14px; font-size: 13px; font-weight: 500; text-align: center; min-height: 20px;"></p>
         </div>
     `;
 
-    document.getElementById("blePairDialogBtn")!.addEventListener("click", async (e) => {
-        e.preventDefault();
+    const startBlePairing = async (acceptAll: boolean) => {
         const btn = document.getElementById("blePairDialogBtn") as HTMLButtonElement;
+        const allBtn = document.getElementById("blePairAllBtn") as HTMLButtonElement;
         const status = document.getElementById("blePairDialogStatus") as HTMLParagraphElement;
         btn.disabled = true;
+        allBtn.disabled = true;
         try {
-            status.textContent = "Please select your device in the browser prompt...";
+            status.textContent = acceptAll 
+                ? "Showing all nearby devices. Please select your phone..." 
+                : "Looking for JanusVault... Please select your phone in the prompt.";
             const urlParams = new URLSearchParams(window.location.search);
             const name = urlParams.get("name") || "Paired Browser";
             
@@ -1005,13 +1081,14 @@ if (urlParamsExt.get("mode") === "ble-pair") {
                 btn.textContent = "Awaiting Phone...";
             }, true, (msg) => {
                 if (!status.innerHTML.includes("Verify this PIN")) {
-                   status.innerText = `[BLE Log]: ${msg}`;
+                   status.innerHTML = `<span style="color:#2563eb; font-weight:600;">ℹ️ ${msg}</span>`;
                 }
-            }); // forcePrompt = true so it strictly runs requestDevice() inside pairing-client
+            }, undefined, acceptAll);
 
             if (!outcome.success) {
                 status.textContent = `Pairing failed: ${outcome.reason}`;
                 btn.disabled = false;
+                allBtn.disabled = false;
                 btn.textContent = "Try Again";
                 return;
             }
@@ -1026,19 +1103,31 @@ if (urlParamsExt.get("mode") === "ble-pair") {
             });
             
             if (res?.paired) {
-                status.textContent = "Paired successfully! You can close this.";
+                status.textContent = "Paired successfully! You can close this window.";
                 chrome.runtime.sendMessage({ type: "BLE_PAIRED" });
                 setTimeout(() => window.close(), 1500);
             } else {
                 status.textContent = `Pairing failed: ${res?.error ?? "unknown error"}`;
                 btn.disabled = false;
+                allBtn.disabled = false;
                 btn.textContent = "Try Again";
             }
         } catch (err: any) {
             status.textContent = `Error: ${err.message}`;
             btn.disabled = false;
-            btn.textContent = "Select Device";
+            allBtn.disabled = false;
+            btn.textContent = "Select JanusVault Device";
         }
+    };
+
+    document.getElementById("blePairDialogBtn")!.addEventListener("click", (e) => {
+        e.preventDefault();
+        startBlePairing(false);
+    });
+
+    document.getElementById("blePairAllBtn")!.addEventListener("click", (e) => {
+        e.preventDefault();
+        startBlePairing(true);
     });
 } else if (urlParamsExt.get("popout") === "sync") {
   syncStatus.textContent = "Please click 'Sync via Bluetooth' again to authorize.";
@@ -1063,7 +1152,12 @@ if (urlParamsExt.get("mode") === "ble-pair") {
        stat.textContent = "Requesting device picker...";
        const JANUSVAULT_SERVICE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
        await (navigator as any).bluetooth.requestDevice({
-         filters: [{ services: [JANUSVAULT_SERVICE_UUID] }]
+         filters: [
+           { services: [JANUSVAULT_SERVICE_UUID] },
+           { namePrefix: 'Janus' },
+           { name: 'JanusVault' }
+         ],
+         optionalServices: [JANUSVAULT_SERVICE_UUID]
        });
        stat.textContent = "Authorized. Processing request...";
        
@@ -1093,7 +1187,12 @@ authMethodSelect.addEventListener("change", async () => {
 });
 
 // Sync initial values from storage
-ExtensionStorage.getLastHost().then((v) => { if (v) hostInput.value = v; });
+ExtensionStorage.getLastHost().then((v) => {
+  if (v) {
+    hostInput.value = v;
+    lanPairHostInput.value = v;
+  }
+});
 ExtensionStorage.getAuthMethod().then((v) => { if (v) authMethodSelect.value = v; });
 
 document.addEventListener("click", () => {
